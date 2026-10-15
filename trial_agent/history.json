@@ -1,0 +1,6 @@
+[
+  {"role": "user", "content": [{"text": "(start of conversation)"}]},
+  {"role": "assistant", "content": [{"text": "Hi James, it's time for your ZT-201 study medication. Please reply TAKEN once you've had it."}]},
+  {"role": "user", "content": [{"text": "TAKEN"}]},
+  {"role": "assistant", "content": [{"text": "Thanks James, logged at 8:05 am."}]}
+]
