@@ -10,7 +10,7 @@ history_file: history.json
 
 email:
   sender: "Continuum AI <continuum.ai.team@gmail.com>"
-  coordinator: replynihira@gmail.com
+  coordinator: 
 
 system_prompt: |
   You are the study companion for participants in clinical trial ZT-201.
