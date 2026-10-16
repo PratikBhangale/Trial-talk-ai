@@ -1,0 +1,17 @@
+{
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "trial_agent": {
+            "runtimeId": "ContinuumAI_trial_agent-M50yJMBk8H",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-east-2:461729033902:runtime/ContinuumAI_trial_agent-M50yJMBk8H",
+            "roleArn": "arn:aws:iam::461729033902:role/AgentCore-ContinuumAI-def-ApplicationAgentTrialAgen-moi3vgezrc5g"
+          }
+        },
+        "stackName": "AgentCore-ContinuumAI-default",
+        "deployHash": "a50503d7d3140647"
+      }
+    }
+  }
+}
