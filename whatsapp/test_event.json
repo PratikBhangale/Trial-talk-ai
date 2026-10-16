@@ -1,0 +1,9 @@
+{
+  "Records": [
+    {
+      "Sns": {
+        "Message": "{\"context\": {\"MetaPhoneNumberIds\": [{\"metaPhoneNumberId\": \"test\", \"arn\": \"arn:aws:social-messaging:us-east-2:461729033902:phone-number-id/test\"}]}, \"whatsAppWebhookEntry\": \"{\\\"id\\\": \\\"test-waba\\\", \\\"changes\\\": [{\\\"field\\\": \\\"messages\\\", \\\"value\\\": {\\\"messaging_product\\\": \\\"whatsapp\\\", \\\"contacts\\\": [{\\\"profile\\\": {\\\"name\\\": \\\"Test\\\"}, \\\"wa_id\\\": \\\"1XXXXXXXXXX\\\"}], \\\"messages\\\": [{\\\"from\\\": \\\"1XXXXXXXXXX\\\", \\\"id\\\": \\\"wamid.test\\\", \\\"type\\\": \\\"text\\\", \\\"text\\\": {\\\"body\\\": \\\"Can I have a glass of wine tonight?\\\"}}]}}]}\"}"
+      }
+    }
+  ]
+}
