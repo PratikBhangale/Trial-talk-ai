@@ -3,3 +3,7 @@ __pycache__/
 .DS_Store
 *.pkg*.zip
 response.json
+
+# Planning docs (local only)
+TrialTalk build plan.pdf
+CLAUDE.md

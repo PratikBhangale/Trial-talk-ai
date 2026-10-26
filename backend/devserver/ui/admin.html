@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrialTalk Admin Portal</title>
+<link rel="stylesheet" href="/ui/common.css">
+</head>
+<body>
+<header></header>
+<main>
+  <div class="panel signed-out" data-signed-out>Sign in as an admin to manage staff accounts. Admins grant access; they can't see participant data.</div>
+
+  <div class="grid hidden" data-signed-in>
+    <div>
+      <div class="panel">
+        <h2>Staff accounts <span class="spacer"></span><button class="small primary" id="newBtn">+ Invite</button></h2>
+        <input id="q" placeholder="Search email, name, site" style="width:100%;margin-bottom:8px">
+        <div class="list" id="userList"></div>
+      </div>
+      <div class="panel">
+        <h2>Roles</h2>
+        <div class="muted" style="font-size:13px">
+          <p style="margin-top:0"><b>coordinator</b>: enroll, edit and withdraw participants; reminders and dosing schedules; requests. Only at their sites.</p>
+          <p><b>PI</b>: everything a coordinator can do, plus AE sign-off. Only at their sites.</p>
+          <p style="margin-bottom:0"><b>admin</b>: this portal only. Can be combined with a role.</p>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel hidden" id="formPanel">
+        <h2 id="formTitle">Invite a staff user <span class="spacer"></span><button class="small" id="closeForm">Close</button></h2>
+        <form class="form" id="userForm">
+          <label>Email *<input name="email" type="email" required value="newcoordinator@riverside.example.org"></label>
+          <label>Name<input name="name" value="Avery Kim"></label>
+          <label>Role<select name="role"><option value="coordinator">coordinator</option><option value="PI">PI</option><option value="">none (admin only)</option></select></label>
+          <label>Sites (comma separated)<input name="site_ids" value="RIVERSIDE"></label>
+          <label>Studies (comma separated, empty = any)<input name="study_ids" value="KOA-301"></label>
+          <label class="inline"><input type="checkbox" name="admin"> Admin access</label>
+          <div class="wide row"><button class="primary" id="saveBtn">Send invite</button>
+            <span class="muted" id="formNote">Cognito emails a temporary password; MFA setup is required at first sign-in.</span></div>
+        </form>
+      </div>
+
+      <div class="panel" id="detailEmpty"><span class="muted">Select a staff account.</span></div>
+      <div class="panel hidden" id="detail">
+        <h2><span id="dTitle"></span><span class="spacer"></span><button class="small" id="editBtn">Edit access</button></h2>
+        <div class="table-wrap" id="dBody"></div>
+        <div class="row" style="margin-top:12px">
+          <button id="disableBtn" class="danger">Disable</button>
+          <button id="enableBtn">Enable</button>
+          <button id="resetBtn2">Reset password</button>
+          <span class="muted">Disabling blocks sign-in and revokes refresh tokens. Access changes apply at the next token refresh (at most 60 min).</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/ui/common.js"></script>
+<script>
+const state = { users: [], selected: null, editing: null };
+
+async function onSignIn(user) {
+  select(null);
+  $('#formPanel').classList.add('hidden');
+  if (user) loadUsers().catch(() => {});
+}
+
+async function loadUsers() {
+  const q = $('#q').value;
+  const { staff } = await api('GET', '/admin/staff' + (q ? '?q=' + encodeURIComponent(q) : ''));
+  state.users = staff;
+  $('#userList').innerHTML = staff.length ? staff.map(u => `
+    <button data-user="${esc(u.username)}" class="${u.username === state.selected ? 'on' : ''}">
+      <span><b>${esc(u.name || u.email)}</b> ${u.role ? `<span class="chip">${esc(u.role)}</span>` : ''} ${u.admin ? '<span class="chip warn">admin</span>' : ''} ${u.enabled ? '' : chip('disabled')}</span>
+      <small>${esc(u.email)} · ${esc(u.site_ids.join(', ') || 'no sites')}</small>
+    </button>`).join('') : '<span class="muted">No staff accounts.</span>';
+  if (state.selected) select(state.selected);
+}
+
+function select(username) {
+  state.selected = username;
+  $$('#userList button').forEach(b => b.classList.toggle('on', b.dataset.user === username));
+  const u = state.users.find(x => x.username === username);
+  $('#detail').classList.toggle('hidden', !u);
+  $('#detailEmpty').classList.toggle('hidden', !!u);
+  if (!u) return;
+  $('#dTitle').innerHTML = `${esc(u.name || u.email)} ${chip(u.enabled ? 'enabled' : 'disabled')}`;
+  $('#dBody').innerHTML = table([
+    ['Email', u.email], ['Role', u.role || 'none'], ['Admin', u.admin], ['Sites', u.site_ids.join(', ')],
+    ['Studies', u.study_ids.join(', ') || 'any'], ['Cognito status', u.status], ['Created', u.created_at], ['Updated', u.updated_at],
+  ].map(([field, value]) => ({ field, value })), ['field', 'value']);
+  $('#disableBtn').classList.toggle('hidden', !u.enabled);
+  $('#enableBtn').classList.toggle('hidden', u.enabled);
+}
+
+function openForm(user) {
+  state.editing = user || null;
+  const f = $('#userForm');
+  $('#formPanel').classList.remove('hidden');
+  $('#formTitle').firstChild.textContent = user ? `Edit access: ${user.email} ` : 'Invite a staff user ';
+  $('#saveBtn').textContent = user ? 'Save access' : 'Send invite';
+  $('#formNote').textContent = user ? 'Takes effect at the user\'s next token refresh.' : 'Cognito emails a temporary password; MFA setup is required at first sign-in.';
+  f.email.disabled = !!user;
+  if (user) {
+    f.email.value = user.email; f.name.value = user.name || ''; f.role.value = user.role || '';
+    f.site_ids.value = user.site_ids.join(','); f.study_ids.value = user.study_ids.join(','); f.admin.checked = user.admin;
+  }
+}
+
+$('#q').oninput = () => { clearTimeout(state.t); state.t = setTimeout(() => loadUsers().catch(() => {}), 250); };
+$('#userList').onclick = e => { const b = e.target.closest('[data-user]'); if (b) select(b.dataset.user); };
+$('#newBtn').onclick = () => { $('#userForm').reset(); openForm(null); };
+$('#editBtn').onclick = () => openForm(state.users.find(u => u.username === state.selected));
+$('#closeForm').onclick = () => $('#formPanel').classList.add('hidden');
+$('#userForm').onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    name: f.name.value, role: f.role.value || null, admin: f.admin.checked,
+    site_ids: f.site_ids.value.split(',').map(s => s.trim()).filter(Boolean),
+    study_ids: f.study_ids.value.split(',').map(s => s.trim()).filter(Boolean),
+  };
+  let out;
+  if (state.editing) out = await api('PATCH', `/admin/staff/${encodeURIComponent(state.editing.username)}`, body);
+  else out = await api('POST', '/admin/staff', { email: f.email.value, ...body });
+  toast(state.editing ? 'Access updated' : `Invited ${out.user.email}. They can now sign in to the staff portal.`);
+  $('#formPanel').classList.add('hidden');
+  state.selected = out.user.username;
+  await reloadIdentities(); await loadUsers();
+};
+
+async function userAction(action, confirmText, body) {
+  const u = state.users.find(x => x.username === state.selected);
+  if (confirmText && !confirm(confirmText.replace('{}', u.email))) return;
+  await api('POST', `/admin/staff/${encodeURIComponent(u.username)}/${action}`, body);
+  toast('Done'); await reloadIdentities(); loadUsers();
+}
+$('#disableBtn').onclick = () => {
+  const reason = prompt('Disable this account? They are signed out everywhere.\n\nReason (optional):');
+  if (reason !== null) userAction('disable', null, { reason: reason || undefined }).catch(() => {});
+};
+$('#enableBtn').onclick = () => userAction('enable').catch(() => {});
+$('#resetBtn2').onclick = () => userAction('reset-password', 'Reset the password for {}? Cognito emails them a code.').catch(() => {});
+
+initPortal('admin', 'staff access management', onSignIn);
+</script>
+</body>
+</html>

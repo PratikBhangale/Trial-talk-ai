@@ -1,0 +1,19 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+  "context": {
+    "account": "461729033902",
+    "region": "us-east-2",
+    "agentRuntimeArn": "arn:aws:bedrock-agentcore:us-east-2:461729033902:runtime/ContinuumAI_trial_agent-M50yJMBk8H",
+    "whatsappPhoneNumberId": "",
+    "legacyTable": "trial_agent",
+    "approvedTemplates": "dose_reminder_v2,visit_reminder_v1,daily_checkin_v1,login_code",
+    "loginTemplate": "login_code",
+    "alertFrom": "",
+    "alertTo": "",
+    "staffCallbackUrls": "http://localhost:5173/",
+    "adminCallbackUrls": "http://localhost:5175/",
+    "corsOrigins": "http://localhost:5173,http://localhost:5174,http://localhost:5175",
+    "cognitoDomainPrefix": "trialtalk-staff-dev",
+    "@aws-cdk/core:defaultCrossStackReferences": "strong"
+  }
+}

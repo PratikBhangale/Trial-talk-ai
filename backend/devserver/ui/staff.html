@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrialTalk Staff Portal</title>
+<link rel="stylesheet" href="/ui/common.css">
+</head>
+<body>
+<header></header>
+<main>
+  <div class="panel signed-out" data-signed-out>Sign in as a coordinator or PI to manage participants at your sites.</div>
+
+  <div class="grid hidden" data-signed-in>
+    <div>
+      <div class="panel">
+        <h2>Participants <span class="spacer"></span><button class="small primary" id="newPartBtn">+ Enroll</button></h2>
+        <div class="muted" id="whoami" style="margin-bottom:8px"></div>
+        <div class="row" style="margin-bottom:8px">
+          <input id="q" placeholder="Search name, id, phone" style="flex:1">
+          <select id="statusFilter">
+            <option value="">All statuses</option>
+            <option>prospect</option><option>screening</option><option>enrolled</option>
+            <option>screen_failed</option><option>withdrawn</option>
+          </select>
+        </div>
+        <div class="list" id="partList"></div>
+      </div>
+      <div class="panel">
+        <h2>Requests from participants <span class="spacer"></span><button class="small" id="reqRefresh">Refresh</button></h2>
+        <div id="staffRequests" class="muted">None</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel hidden" id="enrollPanel">
+        <h2>Enroll a participant <span class="spacer"></span><button class="small" data-close="enrollPanel">Close</button></h2>
+        <form class="form" id="enrollForm">
+          <label>Full name *<input name="full_name" required value="Casey Morgan"></label>
+          <label>Phone (E.164) *<input name="phone_e164" required value="+17325550199"></label>
+          <label>Email<input name="email" value="casey@example.org"></label>
+          <label>Date of birth<input name="date_of_birth" type="date"></label>
+          <label>Study *<input name="study_id" required value="KOA-301"></label>
+          <label>Site *<select name="site_id" id="enrollSite"></select></label>
+          <label>Status<select name="status"><option>enrolled</option><option>screening</option><option>prospect</option></select></label>
+          <label>Language<select name="preferred_language"><option>en</option><option>es</option></select></label>
+          <label>Time zone<input name="timezone" value="America/New_York"></label>
+          <label class="inline"><input type="checkbox" name="whatsapp_opt_in" checked> WhatsApp opt-in</label>
+          <div class="wide row"><button class="primary">Enroll</button><span class="muted">Synthetic data only. Use 555 numbers and example.org addresses.</span></div>
+        </form>
+      </div>
+
+      <div class="panel" id="detailEmpty"><span class="muted">Select a participant.</span></div>
+
+      <div id="detail" class="hidden">
+        <div class="panel">
+          <h2><span id="dTitle"></span> <span class="spacer"></span>
+            <button class="small danger" id="withdrawBtn">Withdraw</button></h2>
+          <form class="form" id="profileForm"></form>
+        </div>
+
+        <div class="panel">
+          <h2>Reminders and dosing <span class="spacer"></span><button class="small primary" id="newRemBtn">+ New reminder</button></h2>
+          <form class="form hidden" id="remForm" style="margin-bottom:12px">
+            <label>Type<select name="reminder_type"><option>dose</option><option>visit</option><option>diary</option><option>custom</option></select></label>
+            <label>Label *<input name="label" value="Morning dose"></label>
+            <label data-dose>Dose label {{1}}<input name="dose_label" value="morning"></label>
+            <label data-dose>Instructions {{2}}<input name="dose_instructions" value="1 tablet with water"></label>
+            <label data-nondose class="hidden">Template<input name="template_name" placeholder="visit_reminder_v1"></label>
+            <label>Schedule<select name="kind"><option value="recurring">Recurring</option><option value="one_time">One time</option></select></label>
+            <label data-rec>Time (participant's zone)<input name="time" type="time" value="08:00"></label>
+            <label data-one class="hidden">Send at<input name="send_at" type="datetime-local"></label>
+            <label data-rec>Starts on<input name="starts_on" type="date"></label>
+            <label data-rec>Ends on<input name="ends_on" type="date"></label>
+            <label>Escalate after misses<input name="escalate_after_misses" type="number" min="1" placeholder="optional"></label>
+            <label>Status<select name="status"><option>active</option><option>draft</option></select></label>
+            <div class="wide days" data-rec>
+              <span class="muted">Days (none = every day):</span>
+              <label><input type="checkbox" value="MON">Mon</label><label><input type="checkbox" value="TUE">Tue</label>
+              <label><input type="checkbox" value="WED">Wed</label><label><input type="checkbox" value="THU">Thu</label>
+              <label><input type="checkbox" value="FRI">Fri</label><label><input type="checkbox" value="SAT">Sat</label>
+              <label><input type="checkbox" value="SUN">Sun</label>
+            </div>
+            <div class="wide row"><button class="primary">Save reminder</button><button type="button" data-close="remForm">Cancel</button></div>
+          </form>
+          <div class="table-wrap" id="remTable"></div>
+        </div>
+
+        <div class="panel">
+          <div class="tabs" id="dTabs">
+            <button data-tab="events" class="on">Clinical timeline</button>
+            <button data-tab="adherence">Adherence</button>
+            <button data-tab="communications">Communications</button>
+          </div>
+          <div class="table-wrap" id="dTabBody"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/ui/common.js"></script>
+<script>
+const state = { pid: null, tab: 'events', reminders: [], me: null };
+
+async function onSignIn(user) {
+  showDetail(null);
+  $('#enrollPanel').classList.add('hidden');
+  if (!user) return;
+  try {
+    state.me = await api('GET', '/staff/me');
+  } catch { state.me = null; return; }
+  $('#whoami').textContent = `${state.me.role} · sites ${state.me.site_ids.join(', ')} · studies ${state.me.study_ids.join(', ') || 'any'}`;
+  $('#enrollSite').innerHTML = state.me.site_ids.map(s => `<option>${esc(s)}</option>`).join('');
+  loadParticipants(); loadStaffRequests();
+}
+
+async function loadParticipants() {
+  const q = new URLSearchParams();
+  if ($('#q').value) q.set('q', $('#q').value);
+  if ($('#statusFilter').value) q.set('status', $('#statusFilter').value);
+  const { participants } = await api('GET', '/staff/participants' + (q.toString() ? '?' + q : ''));
+  $('#partList').innerHTML = participants.length ? participants.map(p => `
+    <button data-pid="${esc(p.participant_id)}" class="${p.participant_id === state.pid ? 'on' : ''}">
+      <span><b>${esc(p.participant_id)}</b> ${esc(p.full_name)} ${chip(p.status)}</span>
+      <small>${esc(p.site_id)} · ${esc(p.phone_e164)}${p.whatsapp_opt_in ? '' : ' · no WhatsApp'}</small>
+    </button>`).join('') : '<span class="muted">No participants visible at your sites.</span>';
+}
+
+async function loadStaffRequests() {
+  const { requests } = await api('GET', '/staff/requests');
+  $('#staffRequests').className = requests.length ? '' : 'muted';
+  $('#staffRequests').innerHTML = requests.length ? requests.map(r => `
+    <div style="padding:6px 0;border-bottom:1px solid var(--border)">
+      <a href="#" data-pid="${esc(r.participant_id)}"><b>${esc(r.participant_id)}</b></a> ${esc(r.full_name)}
+      <div class="muted">${esc(r.subject)} · ${esc(r.created_at)}</div><div>${esc(r.body_text)}</div>
+    </div>`).join('') : 'None';
+}
+
+const PROFILE_FIELDS = [
+  ['full_name', 'Full name *'], ['phone_e164', 'Phone *'], ['date_of_birth', 'Date of birth *', 'date'],
+  ['email', 'Email'], ['address_line1', 'Address'], ['city', 'City'], ['state', 'State'], ['postal_code', 'Postal code'],
+  ['preferred_language', 'Language'], ['timezone', 'Time zone'],
+];
+
+async function showDetail(pid) {
+  state.pid = pid;
+  $$('#partList button').forEach(b => b.classList.toggle('on', b.dataset.pid === pid));
+  $('#detail').classList.toggle('hidden', !pid);
+  $('#detailEmpty').classList.toggle('hidden', !!pid);
+  if (!pid) return;
+  const { participant: p, reminders } = await api('GET', `/staff/participants/${pid}`);
+  $('#dTitle').innerHTML = `${esc(p.participant_id)} · ${esc(p.full_name)} ${chip(p.status)} <span class="chip">${esc(p.site_id)} / ${esc(p.study_id)}</span>`;
+  $('#withdrawBtn').disabled = p.status === 'withdrawn';
+  $('#profileForm').innerHTML = PROFILE_FIELDS.map(([k, l, t]) =>
+    `<label>${esc(l)}<input name="${k}" type="${t || 'text'}" value="${esc(p[k])}" data-orig="${esc(p[k])}"></label>`).join('')
+    + `<label>Status<select name="status" data-orig="${esc(p.status)}">${['prospect', 'screening', 'enrolled', 'screen_failed', 'withdrawn'].map(s =>
+      `<option ${s === p.status ? 'selected' : ''} ${s === 'withdrawn' ? 'disabled' : ''}>${s}</option>`).join('')}</select></label>`
+    + `<label class="inline"><input type="checkbox" name="whatsapp_opt_in" ${p.whatsapp_opt_in ? 'checked' : ''} data-orig="${p.whatsapp_opt_in}"> WhatsApp opt-in</label>`
+    + `<label class="wide">Change reason (* fields need one)<input name="change_reason" placeholder="e.g. Participant reported new phone number"></label>`
+    + `<div class="wide"><button class="primary">Save changes</button> <span class="muted">Only changed fields are sent.</span></div>`;
+  renderReminders(reminders);
+  loadTab();
+}
+
+function renderReminders(reminders) {
+  state.reminders = reminders;
+  $('#remTable').innerHTML = table(reminders.map(r => ({
+    label: r.label, type: r.reminder_type,
+    dose: r.reminder_type === 'dose' ? `${r.template_params?.['1'] ?? ''}: ${r.template_params?.['2'] ?? ''}` : '',
+    schedule: r.send_at ? 'Once at ' + r.send_at : describeCron(r.cron_expr), timezone: r.timezone,
+    status: r.status, next_send_at: r.next_send_at, sent: r.send_count, _r: r,
+  })), ['label', 'type', 'dose', 'schedule', 'timezone', 'status', 'next_send_at', 'sent'], r => {
+    const s = r._r.status, id = esc(r._r.reminder_id), open = !['cancelled', 'completed'].includes(s);
+    return `<div class="row">`
+      + (s === 'active' ? `<button class="small" data-rem="pause" data-id="${id}">Pause</button>` : '')
+      + (s === 'paused' || s === 'draft' ? `<button class="small" data-rem="resume" data-id="${id}">Activate</button>` : '')
+      + (open ? `<button class="small" data-rem="time" data-id="${id}">Change time</button>` : '')
+      + (s === 'active' ? `<button class="small" data-rem="send" data-id="${id}">Send now</button>` : '')
+      + (open ? `<button class="small danger" data-rem="cancel" data-id="${id}">Cancel</button>` : '')
+      + `<button class="small" data-rem="log" data-id="${id}">History</button></div>`;
+  });
+}
+
+async function loadTab() {
+  if (!state.pid) return;
+  $$('#dTabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === state.tab));
+  const body = $('#dTabBody');
+  if (state.tab === 'events') {
+    const { events } = await api('GET', `/staff/participants/${state.pid}/events`);
+    body.innerHTML = table(events, ['record_type', 'status', 'occurred_at', 'source', 'dose_label', 'response', 'verbatim_text', 'summary']);
+  } else if (state.tab === 'adherence') {
+    const a = await api('GET', `/staff/participants/${state.pid}/adherence`);
+    body.innerHTML = `<p>Last ${a.window_days} days: <b>${a.total}</b> dose reminders, taken rate <b>${a.taken_rate === null ? '-' : Math.round(a.taken_rate * 100) + '%'}</b></p>`
+      + table(Object.entries(a.counts).map(([response, n]) => ({ response, n })));
+  } else {
+    const { communications } = await api('GET', `/staff/participants/${state.pid}/communications`);
+    body.innerHTML = table(communications, ['created_at', 'channel', 'direction', 'msg_type', 'template_name', 'subject', 'body_text', 'delivery_status']);
+  }
+}
+
+async function reminderAction(action, id) {
+  const r = state.reminders.find(x => x.reminder_id === id);
+  if (action === 'pause') await api('PATCH', `/staff/reminders/${id}`, { status: 'paused', reason: prompt('Reason (optional)') || undefined });
+  else if (action === 'resume') await api('PATCH', `/staff/reminders/${id}`, { status: 'active' });
+  else if (action === 'time') {
+    const time = prompt('New time, HH:MM in the participant\'s time zone', '21:00'); if (!time) return;
+    await api('PATCH', `/staff/reminders/${id}`, { time, reason: prompt('Reason (optional)') || undefined });
+  } else if (action === 'send') {
+    const out = await api('POST', `/staff/reminders/${id}/send-now`);
+    toast(out.sent ? 'Sent. See Inspector > WhatsApp outbox.' : 'Not sent: ' + (out.reason || ''));
+  } else if (action === 'cancel') {
+    if (!confirm(`Cancel "${r.label}"? The schedule is deleted; the row is kept.`)) return;
+    await api('DELETE', `/staff/reminders/${id}`);
+  } else if (action === 'log') { alert(JSON.stringify(r.change_log, null, 2)); return; }
+  showDetail(state.pid);
+}
+
+// ------------------------------------------------------------ wiring
+let qTimer; $('#q').oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(loadParticipants, 250); };
+$('#statusFilter').onchange = loadParticipants;
+$('#reqRefresh').onclick = loadStaffRequests;
+document.addEventListener('click', e => {
+  const pidEl = e.target.closest('[data-pid]');
+  if (pidEl) { e.preventDefault(); showDetail(pidEl.dataset.pid); }
+  const close = e.target.closest('[data-close]'); if (close) $('#' + close.dataset.close).classList.add('hidden');
+  const rem = e.target.closest('[data-rem]'); if (rem) reminderAction(rem.dataset.rem, rem.dataset.id).catch(() => {});
+});
+$('#dTabs').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) { state.tab = b.dataset.tab; loadTab(); } };
+
+$('#newPartBtn').onclick = () => $('#enrollPanel').classList.remove('hidden');
+$('#enrollForm').onsubmit = async e => {
+  e.preventDefault();
+  const { participant } = await api('POST', '/staff/participants', formData(e.target));
+  toast(`Enrolled ${participant.participant_id}; their participant-site login was created`);
+  $('#enrollPanel').classList.add('hidden');
+  await loadParticipants(); showDetail(participant.participant_id);
+};
+$('#profileForm').onsubmit = async e => {
+  e.preventDefault();
+  const changes = {};
+  for (const el of e.target.elements) {
+    if (!el.name || el.name === 'change_reason') continue;
+    const v = el.type === 'checkbox' ? el.checked : el.value;
+    if (String(v) !== el.dataset.orig) changes[el.name] = v === '' ? null : v;
+  }
+  if (!Object.keys(changes).length) return toast('Nothing changed');
+  if (e.target.change_reason.value) changes.change_reason = e.target.change_reason.value;
+  await api('PATCH', `/staff/participants/${state.pid}`, changes);
+  toast('Saved'); loadParticipants(); showDetail(state.pid);
+};
+$('#withdrawBtn').onclick = async () => {
+  const reason = prompt(`Withdraw ${state.pid}? This cancels reminders, disables their login and opts them out of WhatsApp. Records are kept.\n\nReason (required):`);
+  if (!reason) return;
+  const out = await api('DELETE', `/staff/participants/${state.pid}`, { reason });
+  toast(`Withdrawn; ${out.cancelled_reminders} reminder(s) cancelled`);
+  loadParticipants(); showDetail(state.pid);
+};
+
+const remForm = $('#remForm');
+function syncRemForm() {
+  const dose = remForm.reminder_type.value === 'dose', one = remForm.kind.value === 'one_time';
+  $$('[data-dose]', remForm).forEach(el => el.classList.toggle('hidden', !dose));
+  $$('[data-nondose]', remForm).forEach(el => el.classList.toggle('hidden', dose));
+  $$('[data-rec]', remForm).forEach(el => el.classList.toggle('hidden', one));
+  $$('[data-one]', remForm).forEach(el => el.classList.toggle('hidden', !one));
+}
+remForm.reminder_type.onchange = remForm.kind.onchange = syncRemForm;
+$('#newRemBtn').onclick = () => { remForm.classList.remove('hidden'); syncRemForm(); };
+remForm.onsubmit = async e => {
+  e.preventDefault();
+  const body = formData(remForm);
+  delete body.kind;
+  if (body.escalate_after_misses) body.escalate_after_misses = +body.escalate_after_misses;
+  if (remForm.kind.value === 'recurring') {
+    const days = $$('.days input:checked', remForm).map(c => c.value);
+    if (days.length) body.days = days;
+  } else if (body.send_at) body.send_at = new Date(body.send_at).toISOString();
+  await api('POST', `/staff/participants/${state.pid}/reminders`, body);
+  toast('Reminder saved; schedule created (see Inspector)');
+  remForm.classList.add('hidden'); showDetail(state.pid);
+};
+
+initPortal('staff', 'coordinators and PIs', onSignIn);
+</script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrialTalk Dev Inspector</title>
+<link rel="stylesheet" href="/ui/common.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="portal-name">Inspector</span><small>TrialTalk · dev only, not a portal</small></div>
+  <span class="spacer"></span>
+  <div class="devbar"><a href="/staff">Staff portal</a> · <a href="/participant">Participant site</a> · <a href="/admin">Admin portal</a></div>
+</header>
+<main>
+  <div class="panel">
+    <h2>What would have gone to AWS <span class="spacer"></span><button class="small" id="refresh">Refresh</button></h2>
+    <p class="muted" style="margin:0 0 10px">Fakes record every call. <b>Fire</b> runs a schedule the way EventBridge Scheduler would when it comes due.</p>
+    <div class="tabs" id="tabs">
+      <button data-tab="schedules" class="on">EventBridge schedules</button>
+      <button data-tab="whatsapp">WhatsApp outbox</button>
+      <button data-tab="emails">SES emails</button>
+      <button data-tab="agent_calls">Agent calls</button>
+      <button data-tab="staff_pool">Staff user pool</button>
+      <button data-tab="participant_logins">Participant user pool</button>
+    </div>
+    <div class="table-wrap" id="body"></div>
+  </div>
+</main>
+<div id="toast"></div>
+<script src="/ui/common.js"></script>
+<script>
+let tab = store('inspector.tab') || 'schedules';
+
+async function load() {
+  const outbox = await dev('GET', '/dev/outbox');
+  $$('#tabs button').forEach(b => {
+    b.classList.toggle('on', b.dataset.tab === tab);
+    b.textContent = b.textContent.replace(/ \(\d+\)$/, '') + ` (${outbox[b.dataset.tab].length})`;
+  });
+  const rows = outbox[tab];
+  let html;
+  if (tab === 'schedules') {
+    html = table(rows.map(s => ({ name: s.name, expression: s.expression, timezone: s.timezone, state: s.state, reminder_id: s.input.reminder_id })),
+      null, s => `<button class="small" data-fire="${esc(s.reminder_id)}">Fire</button>`);
+  } else if (tab === 'whatsapp') {
+    html = table(rows.map(m => ({ to: m.to, type: m.type, template: m.template?.name, language: m.template?.language?.code, components: m.template?.components || m.text })));
+  } else if (tab === 'emails') {
+    html = table(rows.map(e => ({ to: e.Destination?.ToAddresses, subject: e.Content?.Simple?.Subject?.Data, body: e.Content?.Simple?.Body?.Text?.Data })));
+  } else html = table(rows);
+  $('#body').innerHTML = html;
+}
+
+$('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; store('inspector.tab', tab); load(); } };
+$('#refresh').onclick = load;
+$('#body').onclick = e => {
+  const fire = e.target.closest('[data-fire]');
+  if (fire) dev('POST', '/dev/fire/' + fire.dataset.fire).then(out => {
+    toast(out.sent ? 'Fired: template sent' : 'Fired: not sent (' + (out.reason || '') + ')'); load();
+  });
+};
+load();
+</script>
+</body>
+</html>
