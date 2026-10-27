@@ -1,14 +1,24 @@
-"""WhatsApp Lambda: receives messages from SNS, asks the agent on AgentCore, replies on WhatsApp."""
+"""WhatsApp Lambda: receives messages from SNS, asks the agent on AgentCore, replies on WhatsApp.
+Reminder button taps are handled deterministically (no agent)."""
 
+import hashlib
 import json
 import os
+import time
+from datetime import datetime, timezone
 
 import boto3
 
 RUNTIME_ARN = os.environ["RUNTIME_ARN"]
-TABLE_NAME = os.environ.get("TABLE_NAME", "trial_agent")
+DEMO_PARTICIPANT_ID = os.environ.get("DEMO_PARTICIPANT_ID", "")   # empty = demo mode off
+MEMORY_ID = os.environ.get("MEMORY_ID", "")                       # optional: notes for the agent
+DB = dict(
+    resourceArn=os.environ["DB_CLUSTER_ARN"],
+    secretArn=os.environ["DB_SECRET_ARN"],      # tt_messaging login: can look up participants by phone
+    database=os.environ.get("DB_NAME", "trialtalk"),
+)
 
-table = boto3.resource("dynamodb").Table(TABLE_NAME)
+rds = boto3.client("rds-data")
 agentcore = boto3.client("bedrock-agentcore")
 social = boto3.client("socialmessaging")
 
@@ -36,32 +46,123 @@ def incoming_messages(event):
                 yield origination_id, message["from"], message
 
 
-# ---------- 2. who is this? ----------
+# ---------- 2. who is this? (Aurora, by phone number) ----------
+
+def _sql(sql: str, **params) -> list[dict]:
+    """Run one statement as tt_messaging. Retries while the database wakes up from idle."""
+    for attempt in range(3):
+        try:
+            r = rds.execute_statement(
+                **DB, sql=sql, formatRecordsAs="JSON",
+                parameters=[{"name": k, "value": {"stringValue": str(v)}} for k, v in params.items()],
+            )
+            return json.loads(r.get("formattedRecords") or "[]")
+        except rds.exceptions.DatabaseResumingException:
+            time.sleep(10)  # ~15s to wake
+    raise RuntimeError("Database did not wake up in time")
+
 
 def find_participant(phone: str) -> str | None:
-    item = table.get_item(Key={"PK": f"PHONE#{phone}", "SK": "LOOKUP"}).get("Item")
-    return item["participant_id"] if item else None
+    """WhatsApp gives digits only (15859107690); Aurora stores +15859107690."""
+    rows = _sql("""SELECT participant_id FROM pii.participants
+                   WHERE phone_e164 = :phone AND status NOT IN ('withdrawn', 'screen_failed')""",
+                phone=f"+{phone}")
+    return rows[0]["participant_id"] if rows else None
 
 
-# ---------- 3. ask the agent ----------
+# ---------- 3. reminder button taps (deterministic, no agent) ----------
 
-def ask_agent(pid: str, text: str) -> str:
+BUTTON_RESPONSES = {
+    "Taken": ("taken", "Thanks! Your {label} is recorded as taken."),
+    "Skipped": ("skipped", "Thanks for letting us know. Your {label} is recorded as skipped. "
+                           "If you have questions about a missed dose, just ask me here."),
+}
+
+
+def handle_button(pid: str, payload: str) -> str | None:
+    """Record a dose response from a reminder button. Payload format: rem:<reminder_id>:<button>."""
+    parts = payload.split(":", 2)
+    if len(parts) != 3 or parts[0] != "rem" or parts[2] not in BUTTON_RESPONSES:
+        return None
+    reminder_id, button = parts[1], parts[2]
+    response, reply = BUTTON_RESPONSES[button]
+
+    # The reminder must belong to the participant who tapped it
+    rows = _sql("SELECT label FROM trial.reminders WHERE reminder_id = :rid::uuid AND participant_id = :pid",
+                rid=reminder_id, pid=pid)
+    if not rows:
+        print(f"Button for a reminder that isn't {pid}'s: {reminder_id}")
+        return None
+    label = rows[0]["label"].lower()
+
+    # Append-only: supersede the latest unanswered DOSE record for this reminder
+    updated = _sql("""
+        INSERT INTO trial.clinical_events (participant_id, record_type, status, source, dose_label,
+          scheduled_at, response, reminder_id, supersedes_event_id, change_reason, details, created_by)
+        SELECT participant_id, 'DOSE', :response, 'whatsapp', dose_label, scheduled_at, :response,
+          reminder_id, event_id, 'Participant replied with WhatsApp button',
+          jsonb_build_object('button', :button), :created_by
+        FROM trial.current_events
+        WHERE reminder_id = :rid::uuid AND participant_id = :pid
+          AND record_type = 'DOSE' AND response = 'no_response'
+        ORDER BY occurred_at DESC LIMIT 1
+        RETURNING event_id""",
+        response=response, button=button, created_by=f"participant:{pid}", rid=reminder_id, pid=pid)
+
+    # No unanswered reminder found (tapped twice, or a test): record a fresh DOSE event instead
+    if not updated:
+        _sql("""
+            INSERT INTO trial.clinical_events (participant_id, record_type, status, source, dose_label,
+              response, reminder_id, details, created_by)
+            VALUES (:pid, 'DOSE', :response, 'whatsapp', :label, :response, :rid::uuid,
+              jsonb_build_object('button', :button), :created_by)""",
+            pid=pid, response=response, label=label, rid=reminder_id, button=button,
+            created_by=f"participant:{pid}")
+
+    print(f"Dose response for {pid}: {response}")
+    note_for_agent(pid, f"Participant tapped '{button}' for their {label} reminder.")
+    return reply.format(label=label)
+
+
+def note_for_agent(pid: str, text: str) -> None:
+    """Leave a note in the agent's memory so it knows what happened outside the conversation."""
+    if not MEMORY_ID:
+        return
+    try:
+        agentcore.create_event(
+            memoryId=MEMORY_ID,
+            actorId=pid,
+            sessionId=f"participant-{pid}",
+            eventTimestamp=datetime.now(timezone.utc),
+            payload=[{"conversational": {"role": "ASSISTANT", "content": {"text": text}}}],
+        )
+    except Exception as e:
+        print(f"Memory note failed: {e}")
+
+
+# ---------- 4. ask the agent ----------
+
+def ask_agent(pid: str, text: str, conversation_key: str | None = None) -> str:
+    session_owner = conversation_key or pid
+    payload = {"participant_id": pid, "text": text}
+    if conversation_key:
+        payload["conversation_key"] = conversation_key
     resp = agentcore.invoke_agent_runtime(
         agentRuntimeArn=RUNTIME_ARN,
-        runtimeSessionId=f"whatsapp-session-{pid}".ljust(33, "0"),  # must be 33+ characters
-        payload=json.dumps({"participant_id": pid, "text": text}).encode(),
+        runtimeSessionId=f"whatsapp-session-{session_owner}".ljust(33, "0"),  # must be 33+ characters
+        payload=json.dumps(payload).encode(),
     )
     return json.loads(resp["response"].read()).get("reply") or ERROR_REPLY
 
 
-# ---------- 4. reply on WhatsApp ----------
+# ---------- 5. reply on WhatsApp ----------
 
 def send_whatsapp(origination_id: str, to: str, text: str) -> None:
     message = {
         "messaging_product": "whatsapp",
         "to": f"+{to}",
         "type": "text",
-        "text": {"body": text[:4096]},  # WhatsApp's limit for a text message
+        "text": {"body": text[:4096]},
     }
     social.send_whatsapp_message(
         originationPhoneNumberId=origination_id,
@@ -74,11 +175,30 @@ def send_whatsapp(origination_id: str, to: str, text: str) -> None:
 
 def handler(event, context):
     for origination_id, sender, message in incoming_messages(event):
-        # Unknown numbers never reach the agent
         pid = find_participant(sender)
+        conversation_key = None
+
         if not pid:
-            print(f"Message from unknown number ending {sender[-4:]}")
-            send_whatsapp(origination_id, sender, UNKNOWN_SENDER_REPLY)
+            if not DEMO_PARTICIPANT_ID:
+                print(f"Message from unknown number ending {sender[-4:]}")
+                send_whatsapp(origination_id, sender, UNKNOWN_SENDER_REPLY)
+                continue
+            # Demo mode: shared synthetic profile, private memory per tester (hashed number, never stored raw)
+            pid = DEMO_PARTICIPANT_ID
+            conversation_key = "demo-" + hashlib.sha256(sender.encode()).hexdigest()[:12]
+            print(f"Demo user {conversation_key}")
+
+        # Reminder button taps: recorded directly, no agent.
+        # Template buttons arrive as "button"; interactive-message buttons arrive as "interactive".
+        button_payload = None
+        if message.get("type") == "button":
+            button_payload = message.get("button", {}).get("payload", "")
+        elif message.get("type") == "interactive" and message.get("interactive", {}).get("type") == "button_reply":
+            button_payload = message["interactive"]["button_reply"].get("id", "")
+
+        if button_payload is not None:
+            reply = handle_button(pid, button_payload)
+            send_whatsapp(origination_id, sender, reply or "Thanks, your response was received.")
             continue
 
         if message.get("type") != "text":
@@ -87,7 +207,7 @@ def handler(event, context):
 
         text = message["text"]["body"].strip()[:1000]
         try:
-            reply = ask_agent(pid, text)
+            reply = ask_agent(pid, text, conversation_key)
         except Exception as e:
             print(f"Agent call failed for {pid}: {e}")
             reply = ERROR_REPLY

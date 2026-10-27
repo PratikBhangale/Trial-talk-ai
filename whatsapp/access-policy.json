@@ -2,22 +2,34 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "PhoneLookup",
+      "Sid": "AuroraDataApi",
       "Effect": "Allow",
-      "Action": "dynamodb:GetItem",
-      "Resource": "arn:aws:dynamodb:us-east-2:461729033902:table/trial_agent"
+      "Action": "rds-data:ExecuteStatement",
+      "Resource": "arn:aws:rds:us-east-1:180026596905:cluster:trialtalk"
+    },
+    {
+      "Sid": "MessagingDbLogin",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:us-east-1:180026596905:secret:trialtalk/db/tt_messaging-YP5JhO"
     },
     {
       "Sid": "CallAgent",
       "Effect": "Allow",
       "Action": "bedrock-agentcore:InvokeAgentRuntime",
-      "Resource": "arn:aws:bedrock-agentcore:us-east-2:461729033902:runtime/ContinuumAI_trial_agent-M50yJMBk8H*"
+      "Resource": "arn:aws:bedrock-agentcore:us-east-1:180026596905:runtime/ContinuumAI_trial_agent-UL2ODbF7Ie*"
     },
     {
       "Sid": "SendWhatsApp",
       "Effect": "Allow",
       "Action": "social-messaging:SendWhatsAppMessage",
-      "Resource": "arn:aws:social-messaging:us-east-2:461729033902:phone-number-id/*"
+      "Resource": "arn:aws:social-messaging:us-east-1:180026596905:phone-number-id/*"
+    },
+    {
+      "Sid": "NoteInAgentMemory",
+      "Effect": "Allow",
+      "Action": "bedrock-agentcore:CreateEvent",
+      "Resource": "arn:aws:bedrock-agentcore:us-east-1:180026596905:memory/trial_agent_memory-LfUMHsApOY"
     }
   ]
 }
