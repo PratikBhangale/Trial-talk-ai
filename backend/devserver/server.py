@@ -1,6 +1,6 @@
 """Local test UI: staff and participant portals over the real Lambda handlers. No AWS needed.
 
-    TT_PG_BIN=<folder with initdb/pg_ctl> python backend/devserver/server.py [--port 8787] [--real-agent]
+    TT_PG_BIN=<folder with initdb/pg_ctl> python backend/devserver/server.py [--port 8787]
 
 Starts a throwaway PostgreSQL built from db/ (plus tests/pending_db_additions.sql), loads db/03_seed.sql, the
 same synthetic data as the deployed database, adds synthetic staff, and serves:
@@ -15,8 +15,7 @@ same synthetic data as the deployed database, adds synthetic staff, and serves:
 The server builds the token claims from the fake user pools the way Cognito would, including the
 real staff pre-token trigger, so what the staff "Team" panel changes (role, sites, disabled) is what the
 next request gets. OpenTelemetry needs `pip install opentelemetry-sdk`; without it the widget says so. Database calls run as each Lambda's own login, so RLS and grants are real.
-Scheduler, WhatsApp, SES and the agent are fakes (tests/local_env.py), unless --real-agent, which
-sends web chat to the deployed AgentCore runtime with your local AWS credentials.
+Scheduler, WhatsApp and SES are fakes (tests/local_env.py).
 Synthetic data only. Everything is deleted when the server stops.
 """
 
@@ -36,8 +35,8 @@ HERE = Path(__file__).resolve().parent
 UI = HERE / "ui"
 sys.path.insert(0, str(HERE.parent / "tests"))
 
-from local_env import (FakeAgentCore, fake_usage, FakeCognito, FakeRdsData, FakeScheduler,  # noqa: E402
-                       FakeWhatsApp, LocalPostgres, SEED_FILE, run_sql_file, wipe)
+from local_env import (FakeCognito, FakeRdsData, FakeScheduler, FakeWhatsApp,  # noqa: E402
+                       LocalPostgres, SEED_FILE, run_sql_file, wipe)
 
 from common import db, scheduling, telemetry, whatsapp  # noqa: E402
 from auth_triggers import staff_pre_token  # noqa: E402
@@ -79,20 +78,11 @@ class AuthError(Exception):
     pass
 
 
-class EchoAgent(FakeAgentCore):
-    def invoke_agent_runtime(self, agentRuntimeArn, runtimeSessionId, payload):
-        body = json.loads(payload)
-        self.calls.append({"session": runtimeSessionId, **body})
-        reply = (f"(local fake agent) You said: \"{body['text']}\". Start the server with --real-agent "
-                 "to talk to the deployed trial_agent.")
-        return {"response": io.BytesIO(json.dumps({"reply": reply, "usage": fake_usage(body["text"], reply)}).encode())}
-
-
-def wire(real_agent: bool) -> None:
+def wire() -> None:
     """Point every Lambda module at the fakes, the way tests/conftest.py does with monkeypatch."""
     fakes.rds, fakes.scheduler = FakeRdsData(pg.port), FakeScheduler()
     fakes.participant_pool, fakes.staff_pool = FakeCognito(), FakeCognito()
-    fakes.whatsapp, fakes.agent, fakes.emails = FakeWhatsApp(), EchoAgent(), []
+    fakes.whatsapp, fakes.emails = FakeWhatsApp(), []
     db.client = lambda: fakes.rds
     scheduling.client = lambda: fakes.scheduler
     whatsapp.client = lambda: fakes.whatsapp
@@ -106,12 +96,6 @@ def wire(real_agent: bool) -> None:
     participant.ALERT_FROM = "alerts@example.org"
     participant.ALERT_TO = {"RIVERSIDE": ["coordinator@riverside-clinic.org"],
                             "LAKEVIEW": ["coordinator@lakeview-health.org"]}
-    if real_agent:
-        cdk = json.loads((HERE.parent / "infra" / "cdk.json").read_text())["context"]
-        participant.AGENT_RUNTIME_ARN = cdk["agentRuntimeArn"]
-        os.environ.setdefault("AWS_REGION", cdk.get("region", "us-east-2"))
-    else:
-        participant.agentcore = lambda: fakes.agent
 
 
 def _invoke_reminder(FunctionName, InvocationType, Payload):
@@ -180,7 +164,7 @@ def seed() -> None:
     with psycopg.connect(pg.admin_dsn, autocommit=True) as c:
         wipe(c)
         run_sql_file(c, SEED_FILE)
-    for f in (fakes.scheduler.schedules, fakes.emails, fakes.whatsapp.sent, fakes.agent.calls):
+    for f in (fakes.scheduler.schedules, fakes.emails, fakes.whatsapp.sent):
         f.clear()
     fakes.participant_pool.__init__()
     fakes.staff_pool.__init__()
@@ -309,7 +293,6 @@ class Handler(BaseHTTPRequestHandler):
                                "timezone": v.get("ScheduleExpressionTimezone"), "state": v.get("State"),
                                "input": json.loads(v["Target"]["Input"])} for k, v in fakes.scheduler.schedules.items()],
                 "emails": list(reversed(fakes.emails)),
-                "agent_calls": list(reversed(fakes.agent.calls)),
                 "participant_logins": [{"username": k, **v, "disabled": k in fakes.participant_pool.disabled}
                                        for k, v in fakes.participant_pool.users.items()],
                 "staff_pool": [{"username": k, "groups": sorted(sp.groups.get(k, set())), **v,
@@ -328,24 +311,17 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8787)
-    ap.add_argument("--real-agent", action="store_true",
-                    help="send web chat to the deployed AgentCore runtime (needs AWS credentials and boto3)")
     args = ap.parse_args()
 
     bin_dir = os.environ.get("TT_PG_BIN")
     if not bin_dir:
         sys.exit("Set TT_PG_BIN to the folder holding initdb and pg_ctl (see backend/README.md, Testing).")
-    if args.real_agent:
-        try:
-            import boto3  # noqa: F401
-        except ImportError:
-            sys.exit("--real-agent needs boto3 in this Python environment.")
 
     global pg
     print("Starting local PostgreSQL...")
     pg = LocalPostgres(bin_dir)
     try:
-        wire(args.real_agent)
+        wire()
         seed()
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
         base = f"http://127.0.0.1:{args.port}"

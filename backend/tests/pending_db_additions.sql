@@ -1,19 +1,19 @@
 -- What the backend needs on top of db/01_schema.sql and db/02_roles_rls.sql, for the participant website features
--- db/ has no room for yet: web chat, seeing staff replies to requests, and emergency alerts (the SOS button).
+-- db/ has no room for yet: web requests, seeing staff replies to requests, and emergency alerts (the SOS button).
 --
 -- Applied only by the local test environment (tests/local_env.py), so the test portals keep those features.
 -- It is NOT applied to Aurora. These widen participant_role, so they are a proposal for the db/ owners;
 -- delete this file to see the test portals with db/ exactly as it is.
 
 ------------------------------------------------------------------------------
--- 1. A channel for rows that come from the website (chat, requests, staff replies to requests)
+-- 1. A channel for rows that come from the website (requests, staff replies to requests)
 ------------------------------------------------------------------------------
 ALTER TABLE trial.communications DROP CONSTRAINT communications_channel_check;
 ALTER TABLE trial.communications ADD CONSTRAINT communications_channel_check
   CHECK (channel IN ('whatsapp','email','web'));
 
 ------------------------------------------------------------------------------
--- 2. Participants read their own web rows: chat history, their requests, and staff replies
+-- 2. Participants read their own web rows: their requests and staff replies
 --    (msg_type 'request_reply', linked to the request through parsed_action.reply_to_comm_id)
 ------------------------------------------------------------------------------
 GRANT SELECT (comm_id, participant_id, channel, direction, msg_type, subject, body_text, parsed_action, created_at)
@@ -22,15 +22,7 @@ CREATE POLICY own_web_messages ON trial.communications FOR SELECT TO participant
   USING (participant_id = current_setting('app.participant_id', true) AND channel = 'web');
 
 ------------------------------------------------------------------------------
--- 3. Participants log their own web chat, with the agent's usage on its replies
---    (db/'s own_requests policy already allows their participant_request rows)
-------------------------------------------------------------------------------
-GRANT INSERT (session_id, latency_ms, input_tokens, output_tokens, model_id) ON trial.communications TO participant_role;
-CREATE POLICY own_web_chat ON trial.communications FOR INSERT TO participant_role
-  WITH CHECK (participant_id = current_setting('app.participant_id', true) AND channel = 'web' AND msg_type = 'text');
-
-------------------------------------------------------------------------------
--- 4. trial.emergency_alerts: one row per emergency (SOS button, or emergency keywords in web chat).
+-- 3. trial.emergency_alerts: one row per emergency (the SOS button).
 --    Alerts need an acknowledge / resolve lifecycle that append-only clinical_events cannot give them, and
 --    participant_role can neither insert nor read AE rows. Repeat presses fold into the open alert (press_count).
 ------------------------------------------------------------------------------

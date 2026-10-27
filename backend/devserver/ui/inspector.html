@@ -20,7 +20,6 @@
       <button data-tab="schedules" class="on">EventBridge schedules</button>
       <button data-tab="whatsapp">WhatsApp outbox</button>
       <button data-tab="emails">SES emails</button>
-      <button data-tab="agent_calls">Agent calls</button>
       <button data-tab="staff_pool">Staff user pool</button>
       <button data-tab="participant_logins">Participant user pool</button>
     </div>
@@ -31,6 +30,7 @@
 <script src="/ui/common.js"></script>
 <script>
 let tab = store('inspector.tab') || 'schedules';
+if (tab === 'agent_calls') tab = 'schedules';
 
 async function load() {
   const outbox = await dev('GET', '/dev/outbox');

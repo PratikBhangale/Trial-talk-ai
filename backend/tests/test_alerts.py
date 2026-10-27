@@ -95,13 +95,6 @@ def test_validation(call_staff, call_participant):
     assert call_staff("POST", "/staff/alerts/not-a-uuid/acknowledge")[0] == 400
 
 
-def test_chat_emergency_keywords_raise_an_alert_too(call_staff, call_participant):
-    pid = enroll(call_staff)
-    call_participant(pid, "POST", "/me/chat", {"text": "I have chest pain and can't breathe"})
-    a = call_staff("GET", "/staff/alerts")[1]["alerts"][0]
-    assert a["source"] == "chat_keyword" and "chest pain" in a["keywords"] and "chest pain" in a["message"]
-
-
 def test_withdrawn_participant_gets_instructions_but_no_page(call_staff, call_participant, aws):
     pid = enroll(call_staff)
     call_staff("DELETE", f"/staff/participants/{pid}", {"reason": "withdrew consent"})
@@ -110,10 +103,12 @@ def test_withdrawn_participant_gets_instructions_but_no_page(call_staff, call_pa
     assert aws.emails == [] and call_staff("GET", "/staff/alerts")[1]["alerts"] == []
 
 
-def test_chat_records_token_usage_and_staff_can_see_it(call_staff, call_participant, aws):
+def test_staff_can_see_agent_token_usage(call_staff, admin):
     pid = enroll(call_staff)
-    call_participant(pid, "POST", "/me/chat", {"text": "When is my next visit?"})
-    call_participant(pid, "POST", "/me/chat", {"text": "Thanks"})
+    for tin, tout in ((425, 6), (421, 3)):  # agent replies on WhatsApp carry their usage
+        admin.execute("INSERT INTO trial.communications (participant_id, channel, direction, msg_type, body_text,"
+                      " input_tokens, output_tokens, model_id) VALUES (%s, 'whatsapp', 'outbound', 'text', 'hi',"
+                      " %s, %s, 'fake-agent-model')", (pid, tin, tout))
     status, out = call_staff("GET", "/staff/usage", query={"days": "7"})
     assert status == 200 and out["totals"]["calls"] == 2
     assert out["totals"]["input_tokens"] > 800 and out["totals"]["output_tokens"] > 0

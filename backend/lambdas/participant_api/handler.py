@@ -6,17 +6,15 @@ app.participant_id, which comes from the token's custom:participant_id, never fr
 
 import json
 import os
-import time
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import boto3
 
-from common import db, safety, telemetry
+from common import db, telemetry
 from common.auth import Participant, participant_claims
 from common.http import HttpError, Router, json_body, query_params
 
-AGENT_RUNTIME_ARN = os.environ.get("AGENT_RUNTIME_ARN", "")
 ALERT_FROM = os.environ.get("ALERT_FROM", "")
 
 
@@ -35,21 +33,9 @@ def _recipients_by_site(raw: str) -> dict[str, list[str]]:
 
 
 ALERT_TO = _recipients_by_site(os.environ.get("ALERT_TO", ""))
-MAX_CHAT_CHARS = 1000
-
-AGENT_ERROR_REPLY = ("Sorry, something went wrong on my side. If this is urgent, please contact your "
-                     "study site or emergency services directly.")
 
 router = Router()
-_agentcore = None
 _ses = None
-
-
-def agentcore():
-    global _agentcore
-    if _agentcore is None:
-        _agentcore = boto3.client("bedrock-agentcore")
-    return _agentcore
 
 
 def ses():
@@ -273,84 +259,6 @@ def my_alerts(event, me: Participant):
             "FROM trial.emergency_alerts WHERE participant_id = :pid ORDER BY created_at DESC LIMIT 10",
             pid=me.participant_id)
     return 200, {"alerts": rows}
-
-
-# ------------------------------------------------------------------ chat
-
-@router.route("GET", "/me/chat")
-def chat_history(event, me: Participant):
-    with scoped(me) as t:
-        rows = t.query(
-            "SELECT comm_id, direction, msg_type, body_text, created_at FROM trial.communications "
-            "WHERE participant_id = :pid AND channel = 'web' AND msg_type = 'text' "
-            "ORDER BY created_at DESC LIMIT 50", pid=me.participant_id)
-    return 200, {"messages": list(reversed(rows))}
-
-
-@router.route("POST", "/me/chat")
-def chat(event, me: Participant):
-    text = (json_body(event).get("text") or "").strip()
-    if not text:
-        raise HttpError(400, "text is required")
-    if len(text) > MAX_CHAT_CHARS:
-        raise HttpError(400, f"Messages are limited to {MAX_CHAT_CHARS} characters")
-
-    with scoped(me) as t:
-        p = _profile(t, me.participant_id)
-        if p["status"] == "withdrawn":
-            raise HttpError(403, "This account is no longer active. Please contact your study site.")
-        session_id = f"web-{me.participant_id}-{datetime.now(ZoneInfo(p['timezone'])):%Y-%m-%d}"
-        _log(t, me.participant_id, "inbound", text, session_id)
-
-    # Layer 0: emergencies never wait for the model.
-    hits = safety.emergency_keywords(text)
-    if hits:
-        reply = safety.EMERGENCY_REPLY.get(p["preferred_language"], safety.EMERGENCY_REPLY["en"])
-        with scoped(me) as t:
-            _, is_new = raise_alert(t, me.participant_id, severity="life_threatening", source="chat_keyword",
-                                    message=text[:1000], keywords=hits)
-            _log(t, me.participant_id, "outbound", reply, session_id)
-        if is_new:
-            _alert_team(p, hits, "life_threatening")
-        return 200, {"reply": reply, "emergency": True}
-
-    started = time.monotonic()
-    usage = {}
-    try:
-        reply, usage = ask_agent(me.participant_id, text, session_id)
-    except Exception as e:
-        print(f"Agent call failed for {me.participant_id}: {type(e).__name__}: {e}")
-        reply = AGENT_ERROR_REPLY
-    latency_ms = int((time.monotonic() - started) * 1000)
-
-    with scoped(me) as t:
-        _log(t, me.participant_id, "outbound", reply, session_id, latency_ms, usage)
-    telemetry.count("trialtalk.llm.tokens", usage.get("input_tokens") or 0, direction="input")
-    telemetry.count("trialtalk.llm.tokens", usage.get("output_tokens") or 0, direction="output")
-    return 200, {"reply": reply, "emergency": False}
-
-
-def ask_agent(pid: str, text: str, session_id: str) -> tuple[str, dict]:
-    """Returns (reply, usage). The agent reports usage as {input_tokens, output_tokens, model_id}; until it does, {}."""
-    with telemetry.span("agentcore.invoke", **{"rpc.system": "aws-api", "rpc.service": "bedrock-agentcore"}):
-        resp = agentcore().invoke_agent_runtime(
-            agentRuntimeArn=AGENT_RUNTIME_ARN,
-            runtimeSessionId=session_id.ljust(33, "0"),  # AgentCore needs 33+ characters
-            payload=json.dumps({"participant_id": pid, "text": text, "channel": "web"}).encode(),
-        )
-        out = json.loads(resp["response"].read())
-        return out.get("reply") or AGENT_ERROR_REPLY, out.get("usage") or {}
-
-
-def _log(t: db.Tx, pid: str, direction: str, text: str, session_id: str, latency_ms: int | None = None,
-         usage: dict | None = None) -> None:
-    usage = usage or {}
-    t.execute(
-        "INSERT INTO trial.communications (participant_id, channel, direction, msg_type, body_text, session_id,"
-        "  latency_ms, input_tokens, output_tokens, model_id) "
-        "VALUES (:pid, 'web', :dir, 'text', :body, :sid, :lat::int, :tin::int, :tout::int, :model::text)",
-        pid=pid, dir=direction, body=text, sid=session_id, lat=latency_ms, tin=usage.get("input_tokens"),
-        tout=usage.get("output_tokens"), model=usage.get("model_id"))
 
 
 def _alert_team(p: dict, hits: list[str], severity: str) -> None:

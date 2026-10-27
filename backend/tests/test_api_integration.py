@@ -207,8 +207,6 @@ def test_participant_cannot_reach_other_participants(call_staff, call_participan
     pid = enroll(call_staff)
     assert call_participant("P-9999", "GET", "/me")[0] == 404
     assert call_participant("P-9999", "GET", "/me/reminders")[1]["reminders"] == []
-    call_participant(pid, "POST", "/me/chat", {"text": "hello"})
-    assert call_participant("P-9999", "GET", "/me/chat")[1]["messages"] == []
 
 
 def test_participant_history_hides_staff_only_records(call_staff, call_participant, admin):
@@ -230,35 +228,3 @@ def test_participant_requests_reach_staff_queue(call_staff, call_participant):
     status, body = call_staff("GET", "/staff/requests")
     assert [r["participant_id"] for r in body["requests"]] == [pid]
     assert call_staff("GET", "/staff/requests", claims=OTHER_SITE_CLAIMS)[1]["requests"] == []
-
-
-def test_chat_calls_agent_with_token_participant_and_logs(call_staff, call_participant, aws):
-    pid = enroll(call_staff)
-    status, body = call_participant(pid, "POST", "/me/chat", {"text": "When is my next visit?",
-                                                              "participant_id": "P-0001"})
-    assert status == 200 and body == {"reply": "echo: When is my next visit?", "emergency": False}
-    call = aws.agent.calls[-1]
-    assert call["participant_id"] == pid  # from the token, never the request body
-    assert call["session"].startswith(f"web-{pid}-") and len(call["session"]) >= 33
-
-    status, body = call_participant(pid, "GET", "/me/chat")
-    assert [(m["direction"], m["body_text"]) for m in body["messages"]] == [
-        ("inbound", "When is my next visit?"), ("outbound", "echo: When is my next visit?")]
-    # Staff see the same messages in the participant timeline
-    comms = call_staff("GET", f"/staff/participants/{pid}/communications")[1]["communications"]
-    assert len(comms) == 2
-
-
-def test_chat_emergency_skips_agent_and_alerts(call_staff, call_participant, aws):
-    pid = enroll(call_staff)
-    status, body = call_participant(pid, "POST", "/me/chat", {"text": "no puedo respirar"})
-    assert status == 200 and body["emergency"] is True and "911" in body["reply"]
-    assert aws.agent.calls == []
-    assert len(aws.emails) == 1 and pid in aws.emails[0]["Content"]["Simple"]["Subject"]["Data"]
-    assert "respirar" not in aws.emails[0]["Content"]["Simple"]["Body"]["Text"]["Data"].split("(")[0]
-
-
-def test_withdrawn_participant_cannot_chat(call_staff, call_participant):
-    pid = enroll(call_staff)
-    call_staff("DELETE", f"/staff/participants/{pid}", {"reason": "withdrew consent"})
-    assert call_participant(pid, "POST", "/me/chat", {"text": "hi"})[0] == 403

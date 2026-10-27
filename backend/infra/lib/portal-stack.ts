@@ -16,7 +16,6 @@ import { SchedulerStack } from './scheduler-stack';
 export interface PortalStackProps extends StackProps {
   data: DataStack;
   scheduler: SchedulerStack;
-  agentRuntimeArn: string;
   whatsappPhoneNumberId: string;
   legacyTable: string;
   approvedTemplates: string;
@@ -172,22 +171,15 @@ export class PortalStack extends Stack {
       handler: 'participant_api.handler.handler',
       data,
       login: 'participant_api',
-      timeout: Duration.seconds(29), // HTTP API integration limit; the agent usually answers in a few seconds
+      timeout: Duration.seconds(29), // HTTP API integration limit
       memorySize: 512,
       layers: otelLayers,
       environment: {
         ...otelEnv,
-        AGENT_RUNTIME_ARN: props.agentRuntimeArn,
         ALERT_FROM: props.alertFrom,
         ALERT_TO: props.alertTo,
       },
     });
-    participantFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-        resources: [props.agentRuntimeArn, `${props.agentRuntimeArn}/*`],
-      }),
-    );
     if (props.alertFrom) {
       participantFn.addToRolePolicy(
         new iam.PolicyStatement({

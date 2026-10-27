@@ -11,7 +11,6 @@ Cognito (staff pool | participant pool) → API Gateway HTTP API (JWT authorizer
 participant SOS button → participant_api → trial.emergency_alerts + immediate SES email → staff alerts widget
 every request → OpenTelemetry spans + metrics → staff observability widget (and OTLP, if configured)
 staff reminder actions → EventBridge Scheduler rem-<reminder_id> → reminder Lambda → WhatsApp template
-participant chat → participant_api → Layer 0 emergency check → AgentCore Runtime (trial_agent)
 ```
 
 ```
@@ -20,7 +19,7 @@ backend/
     common/                 db (Data API + set_config), auth (claims, require), http router, telemetry (OpenTelemetry),
                             scheduling (EventBridge Scheduler), whatsapp, safety (Layer 0), legacy_mirror
     staff_api/              /staff/* routes
-    participant_api/        /me/* routes (incl. chat)
+    participant_api/        /me/* routes
     (staff_api/accounts.py  /staff/accounts routes: staff accounts, roles, sites; Cognito only)
     reminder/               fired by Scheduler or "Send now"
     auth_triggers/          staff pre-token; participant passwordless login (code on WhatsApp)
@@ -82,9 +81,7 @@ As the plan requires, staff only *schedule* doses here. No API or agent tool cha
 | POST | `/staff/alerts/{aid}/acknowledge` | "I have seen this." Idempotent; the first acknowledger is recorded |
 | POST | `/staff/alerts/{aid}/resolve` | `{"note": "..."}` is required: what happened and what was done. Resolved alerts stay for the record |
 
-Alerts come from two places, both stored in `trial.emergency_alerts` (the one table beyond the plan's four, because alerts need a status lifecycle that append-only `clinical_events` cannot give them):
-- the participant's SOS button (`POST /me/emergency`, below), severity `life_threatening` by default;
-- Layer 0 emergency keywords in the web chat, which used to send only an email.
+Alerts come from the participant's SOS button (`POST /me/emergency`, below), severity `life_threatening` by default. They are stored in `trial.emergency_alerts` (the one table beyond the plan's four, because alerts need a status lifecycle that append-only `clinical_events` cannot give them).
 
 Repeat presses while an alert is unresolved (30 minutes) are folded into it as `press_count`, so staff see one alert, not fifty, and the site gets one email. A press after resolution opens a new alert. The email carries no message content.
 
@@ -129,8 +126,6 @@ Each change prints an `audit` line to CloudWatch.
 | GET / POST | `/me/requests` | `{"kind": "reminder_change" \| "reminder_pause" \| "profile_change" \| "withdrawal" \| "whatsapp_opt_out" \| "contact_team" \| "history_correction", "message": "..."}`. Requests show up in `/staff/requests` |
 | POST | `/me/emergency` | The SOS button. An empty body is a complete request: it raises a `life_threatening` alert, emails the site team and returns the emergency instruction in the participant's language. Optional `message` and `severity` (`life_threatening` / `urgent` / `concern`) |
 | GET | `/me/emergency` | Own recent alerts and their status (open / acknowledged / resolved), so the page can show "your team has seen this" |
-| GET | `/me/chat` | Last 50 web chat messages |
-| POST | `/me/chat` | `{"text": "..."}` returns `{"reply", "emergency"}`. Emergency keywords (en/es) get the fixed emergency reply, a staff alert and an immediate team email, and never reach the model. Everything else goes to the deployed `trial_agent` |
 
 ## Decisions and departures from the plan
 
@@ -141,7 +136,7 @@ Each change prints an `audit` line to CloudWatch.
    - removes the WhatsApp phone lookup
 
    Hard deletion is revoked from every role in the schema.
-2. **Web chat is a new channel.** The plan's participant website has no chatbot. I added `'web'` to `communications.channel`, and `participant_role` can read its own web rows.
+2. **Web is a new channel.** Website requests and staff replies to them are logged with channel `'web'` in `communications`, and `participant_role` can read its own web rows. The participant website has no chat; participants talk to the agent on WhatsApp.
 3. **DynamoDB bridge.** Aurora is the source of truth, but the deployed agent (`store.get_profile`) and `whatsapp/handler.py` still read DynamoDB `trial_agent`. To keep them working, `common/legacy_mirror.py` copies the profile, dose times and phone lookup there after every staff change. Set context `legacyTable` to `""` to turn this off once the agent reads Aurora. Nothing in the DynamoDB path was deleted.
 4. **Region.** The stacks default to `us-east-2`, next to the deployed agent runtime (`cdk.json` → `region`). The target `us-east-1` is a context change plus redeploying the agent there.
 5. **Small schema additions**, all listed at the top of `schema.sql`:
@@ -172,7 +167,7 @@ TT_PG_BIN=.pg/Library/bin .pg/python -m pytest backend/tests   # Linux/macOS: .p
 
 The integration tests swap the RDS Data API for a fake that runs each statement on the local server, logged in as the same database user the Lambda would use (`tt_portal`, `tt_participant`, `tt_messaging`). That means grants, RLS and `set_config` scoping all get exercised, not mocked. The fakes and the Postgres setup are in `tests/local_env.py`.
 
-The local database is built from `db/01_schema.sql` and `db/02_roles_rls.sql`, the schema's source of truth, plus `tests/pending_db_additions.sql`. That last file holds what the participant website needs and db/ doesn't have yet: the `web` channel, participants reading their own web messages, web chat inserts and `trial.emergency_alerts`. It is applied locally only, never to Aurora. Without it, the chat, SOS, request and alert tests fail.
+The local database is built from `db/01_schema.sql` and `db/02_roles_rls.sql`, the schema's source of truth, plus `tests/pending_db_additions.sql`. That last file holds what the participant website needs and db/ doesn't have yet: the `web` channel, participants reading their own web messages and `trial.emergency_alerts`. It is applied locally only, never to Aurora. Without it, the SOS, request and alert tests fail.
 
 ### Test portals (local, no AWS)
 
@@ -190,15 +185,15 @@ Participants you enroll get the next free id after the highest one you can see (
 Each portal is its own page, as it will be deployed:
 
 - **`/staff`** (coordinators and PIs): widgets across the top, with **Emergency alerts** (refreshes every 4 s, pulses and beeps on a new one, acknowledge / resolve), **Token usage**, **Team** (invite, edit, disable, reset staff accounts) and, at the bottom, **Observability** (requests, error rate, average and slowest latency, counters); then enroll, edit and withdraw participants; create dose, visit or one-time reminders; pause, resume, change the time, send now or cancel; timeline, adherence, communications and the request queue.
-- **`/participant`**: a big **I NEED HELP NOW** button (one press, no confirmation, no input) that shows the instruction and then live alert status; dose schedule, profile, history, requests, and chat. The emergency keyword buttons show the Layer 0 path.
-- **`/inspector`** (dev only, not a portal): what would have gone to AWS, meaning EventBridge schedules (**Fire** runs one the way Scheduler would), the WhatsApp outbox, SES emails, agent calls and both user pools.
+- **`/participant`**: a big **I NEED HELP NOW** button (one press, no confirmation, no input) that shows the instruction and then live alert status; dose schedule, profile, history and requests.
+- **`/inspector`** (dev only, not a portal): what would have gone to AWS, meaning EventBridge schedules (**Fire** runs one the way Scheduler would), the WhatsApp outbox, SES emails and both user pools.
 
 Each page has a dev sign-in picker in place of Cognito. The server builds the token claims from fake user pools the way Cognito would, including the real staff pre-token trigger. Sign-in follows those pools:
 - Whatever the Team widget changes applies on the next request.
 - Disabled staff and withdrawn participants are refused.
 - Each portal only accepts its own users.
 
-Everything below API Gateway is real code against real RLS. Chat replies come from a local echo agent; `--real-agent` sends them to the deployed runtime instead, which needs boto3 and AWS credentials. Stop the server with Ctrl+C, which deletes the database.
+Everything below API Gateway is real code against real RLS. Stop the server with Ctrl+C, which deletes the database.
 
 ## Deploy
 

@@ -19,55 +19,37 @@
     </div>
   </div>
 
-  <div class="grid2 hidden" data-signed-in>
-    <div>
-      <div class="panel">
-        <h2>My medication schedule</h2>
-        <div id="pDoses" class="muted">Loading...</div>
-        <h2 style="margin-top:12px">Other reminders</h2>
-        <div id="pOther" class="muted">None</div>
-      </div>
-      <div class="panel">
-        <h2>My details</h2>
-        <form class="form" id="pProfile"></form>
-      </div>
-      <div class="panel">
-        <h2>Ask the study team</h2>
-        <form class="form" id="pReqForm">
-          <label>Request<select name="kind">
-            <option value="reminder_change">Change a reminder time</option>
-            <option value="reminder_pause">Pause reminders</option>
-            <option value="profile_change">Change name, birth date or phone</option>
-            <option value="contact_team">Contact my team</option>
-            <option value="history_correction">Correct my history</option>
-            <option value="whatsapp_opt_out">Stop WhatsApp messages</option>
-            <option value="withdrawal">Leave the study</option>
-          </select></label>
-          <label class="wide">Message<textarea name="message" rows="2">Could my evening reminder be at 9 PM instead?</textarea></label>
-          <div class="wide"><button class="primary">Send request</button></div>
-        </form>
-        <div id="pRequests" style="margin-top:10px"></div>
-      </div>
-      <div class="panel">
-        <h2>My history</h2>
-        <div class="table-wrap" id="pHistory"></div>
-      </div>
+  <div class="hidden" data-signed-in>
+    <div class="panel">
+      <h2>My medication schedule</h2>
+      <div id="pDoses" class="muted">Loading...</div>
+      <h2 style="margin-top:12px">Other reminders</h2>
+      <div id="pOther" class="muted">None</div>
     </div>
-    <div>
-      <div class="panel">
-        <h2>Chat with TrialTalk <span class="spacer"></span><span class="chip">Emergency keywords skip the model</span></h2>
-        <div class="chat" id="chat"></div>
-        <form class="row" id="chatForm" style="margin-top:8px">
-          <input id="chatText" placeholder="Type a message..." style="flex:1" autocomplete="off">
-          <button class="primary">Send</button>
-        </form>
-        <div class="row" style="margin-top:6px">
-          <span class="muted">Try:</span>
-          <button class="small" data-say="When is my next dose?">Next dose?</button>
-          <button class="small" data-say="I have chest pain and can't breathe">Emergency (en)</button>
-          <button class="small" data-say="tengo dolor de pecho">Emergency (es)</button>
-        </div>
-      </div>
+    <div class="panel">
+      <h2>My details</h2>
+      <form class="form" id="pProfile"></form>
+    </div>
+    <div class="panel">
+      <h2>Ask the study team</h2>
+      <form class="form" id="pReqForm">
+        <label>Request<select name="kind">
+          <option value="reminder_change">Change a reminder time</option>
+          <option value="reminder_pause">Pause reminders</option>
+          <option value="profile_change">Change name, birth date or phone</option>
+          <option value="contact_team">Contact my team</option>
+          <option value="history_correction">Correct my history</option>
+          <option value="whatsapp_opt_out">Stop WhatsApp messages</option>
+          <option value="withdrawal">Leave the study</option>
+        </select></label>
+        <label class="wide">Message<textarea name="message" rows="2">Could my evening reminder be at 9 PM instead?</textarea></label>
+        <div class="wide"><button class="primary">Send request</button></div>
+      </form>
+      <div id="pRequests" style="margin-top:10px"></div>
+    </div>
+    <div class="panel">
+      <h2>My history</h2>
+      <div class="table-wrap" id="pHistory"></div>
     </div>
   </div>
 </main>
@@ -98,8 +80,8 @@ async function onSignIn(user) {
   clearTimeout(sosTimer);
   if (!user) return;
   showSos(null);
-  const [{ participant: p }, rem, hist, reqs, chat] = await Promise.all([
-    api('GET', '/me'), api('GET', '/me/reminders'), api('GET', '/me/history'), api('GET', '/me/requests'), api('GET', '/me/chat'),
+  const [{ participant: p }, rem, hist, reqs] = await Promise.all([
+    api('GET', '/me'), api('GET', '/me/reminders'), api('GET', '/me/history'), api('GET', '/me/requests'),
   ]);
   $('#pDoses').className = rem.dose_schedule.length ? '' : 'muted';
   $('#pDoses').innerHTML = rem.dose_schedule.length ? rem.dose_schedule.map(d => `
@@ -117,30 +99,8 @@ async function onSignIn(user) {
     <div class="muted">${esc(r.created_at)} · ${esc(r.subject)}</div><div>${esc(r.body_text)}</div>
     ${r.replies.length ? r.replies.map(x => `<div class="dose" style="margin:4px 0 0 12px"><b>Study team</b> <span class="muted">${esc(x.created_at)}</span><div>${esc(x.body_text)}</div></div>`).join('')
       : '<div class="muted">Waiting for a reply from your study team.</div>'}</div>`).join('');
-  $('#chat').innerHTML = '';
-  chat.messages.forEach(m => bubble(m.body_text, m.direction));
 }
 
-function bubble(text, direction, emergency) {
-  const b = document.createElement('div');
-  b.className = `bubble ${direction === 'inbound' ? 'in' : 'out'}${emergency ? ' emergency' : ''}`;
-  b.textContent = text;
-  $('#chat').append(b); $('#chat').scrollTop = 1e9;
-  return b;
-}
-
-async function sendChat(text) {
-  if (!text.trim()) return;
-  bubble(text, 'inbound');
-  const wait = bubble('...', 'outbound');
-  try {
-    const out = await api('POST', '/me/chat', { text });
-    wait.remove(); bubble(out.reply, 'outbound', out.emergency);
-    if (out.emergency) toast('Emergency path: fixed reply, team emailed (see Inspector > SES emails)');
-  } catch (e) { wait.textContent = 'Error: ' + e.message; }
-}
-
-document.addEventListener('click', e => { const say = e.target.closest('[data-say]'); if (say) sendChat(say.dataset.say); });
 $('#pProfile').onsubmit = async e => {
   e.preventDefault();
   const changes = {};
@@ -153,7 +113,6 @@ $('#pReqForm').onsubmit = async e => {
   await api('POST', '/me/requests', formData(e.target));
   toast('Sent to your study team'); onSignIn(TT.user);
 };
-$('#chatForm').onsubmit = e => { e.preventDefault(); const t = $('#chatText').value; $('#chatText').value = ''; sendChat(t); };
 
 initPortal('participant', 'for study participants', onSignIn);
 </script>

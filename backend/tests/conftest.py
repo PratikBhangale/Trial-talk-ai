@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-from local_env import FakeAgentCore, FakeCognito, FakeRdsData, FakeScheduler, FakeWhatsApp, LocalPostgres, wipe
+from local_env import FakeCognito, FakeRdsData, FakeScheduler, FakeWhatsApp, LocalPostgres, wipe
 
 
 @pytest.fixture(scope="session")
@@ -49,13 +49,12 @@ def aws(pg, clean_db, monkeypatch):
     import participant_api.handler as participant
 
     fakes = types.SimpleNamespace(rds=FakeRdsData(pg["port"]), scheduler=FakeScheduler(), cognito=FakeCognito(),
-                                  whatsapp=FakeWhatsApp(), agent=FakeAgentCore(), emails=[])
+                                  whatsapp=FakeWhatsApp(), emails=[])
     monkeypatch.setattr(db, "client", lambda: fakes.rds)
     monkeypatch.setattr(scheduling, "client", lambda: fakes.scheduler)
     monkeypatch.setattr(whatsapp, "client", lambda: fakes.whatsapp)
     monkeypatch.setattr(staff, "cognito", lambda: fakes.cognito)
     monkeypatch.setattr(staff, "PARTICIPANT_POOL_ID", "pool")
-    monkeypatch.setattr(participant, "agentcore", lambda: fakes.agent)
     monkeypatch.setattr(participant, "ses", lambda: types.SimpleNamespace(
         send_email=lambda **kw: fakes.emails.append(kw)))
     monkeypatch.setattr(participant, "ALERT_FROM", "alerts@example.org")

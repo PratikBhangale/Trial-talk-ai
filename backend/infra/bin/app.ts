@@ -22,7 +22,6 @@ new PortalStack(app, 'TrialTalk-Portal', {
   env,
   data,
   scheduler,
-  agentRuntimeArn: ctx('agentRuntimeArn'),
   whatsappPhoneNumberId: ctx('whatsappPhoneNumberId'),
   legacyTable: ctx('legacyTable'),
   approvedTemplates: ctx('approvedTemplates'),

@@ -6,7 +6,6 @@ The Fake* classes replace the boto3 clients: FakeRdsData runs Data API calls on 
 same login the Lambda would use, so grants and RLS are exercised for real.
 """
 
-import io
 import json
 import os
 import re
@@ -286,18 +285,3 @@ class FakeWhatsApp:
         return {"messageId": f"wamid.{uuid.uuid4().hex[:12]}"}
 
 
-def fake_usage(text: str, reply: str) -> dict:
-    """Made-up token counts (about 4 characters per token, plus a fixed system prompt) until the real agent reports them."""
-    return {"input_tokens": 420 + len(text) // 4, "output_tokens": max(1, len(reply) // 4), "model_id": "fake-agent-model"}
-
-
-
-class FakeAgentCore:
-    def __init__(self):
-        self.calls = []
-
-    def invoke_agent_runtime(self, agentRuntimeArn, runtimeSessionId, payload):
-        body = json.loads(payload)
-        self.calls.append({"session": runtimeSessionId, **body})
-        reply = f"echo: {body['text']}"
-        return {"response": io.BytesIO(json.dumps({"reply": reply, "usage": fake_usage(body["text"], reply)}).encode())}
