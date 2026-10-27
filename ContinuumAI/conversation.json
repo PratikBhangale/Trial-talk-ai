@@ -1,0 +1,554 @@
+{
+    "events": [
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072859507#512ab31f",
+            "eventTimestamp": "2026-10-26T23:47:39.507000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:47:39.507893+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072859402#9b46cc3a",
+            "eventTimestamp": "2026-10-26T23:47:39.402000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"text\": \"List every question I have asked you so far.\"}], \"tracking_id\": \"237ccde6-0c70-446f-9c67-551e08626f79\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:47:39.402707+00:00\", \"updated_at\": \"2026-10-27T03:47:39.402711+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072827506#8ff0ba5f",
+            "eventTimestamp": "2026-10-26T23:47:07.506000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:47:07.506496+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072827388#ac261ab7",
+            "eventTimestamp": "2026-10-26T23:47:07.388000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"text\": \"List every question I have asked you so far.\"}], \"tracking_id\": \"71ba9456-e50a-441d-a4a1-3d35ae81adfe\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:47:07.388461+00:00\", \"updated_at\": \"2026-10-27T03:47:07.388465+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072779752#70bf4610",
+            "eventTimestamp": "2026-10-26T23:46:19.752000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"assistant\", \"content\": [{\"text\": \"You asked what time you should take your medication.\"}], \"metadata\": {\"usage\": {\"inputTokens\": 1546, \"outputTokens\": 13, \"totalTokens\": 1559}, \"metrics\": {\"latencyMs\": 2667, \"timeToFirstByteMs\": 2650}}, \"tracking_id\": \"a4bf610f-9439-4f9b-adf8-9de72d7fbc3a\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:46:19.752880+00:00\", \"updated_at\": \"2026-10-27T03:46:19.752895+00:00\"}"
+                        },
+                        "role": "ASSISTANT"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072776977#d04feed9",
+            "eventTimestamp": "2026-10-26T23:46:16.977000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:46:16.977839+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072776882#abb11fba",
+            "eventTimestamp": "2026-10-26T23:46:16.882000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"text\": \"What did I ask you about earlier?\"}], \"tracking_id\": \"a37d3b5e-abda-4870-bb03-2b727a88c7eb\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:46:16.882429+00:00\", \"updated_at\": \"2026-10-27T03:46:16.882434+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072635706#dbd5d5c6",
+            "eventTimestamp": "2026-10-26T23:43:55.706000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:43:55.706210+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072635605#760dbe65",
+            "eventTimestamp": "2026-10-26T23:43:55.605000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"text\": \"What did I ask you about earlier?\"}], \"tracking_id\": \"6edce7ba-edf8-4f9b-81fa-a10d26bea3e1\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:43:55.605757+00:00\", \"updated_at\": \"2026-10-27T03:43:55.605762+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072449123#f054dfcb",
+            "eventTimestamp": "2026-10-26T23:40:49.123000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"assistant\", \"content\": [{\"text\": \"You asked whether you could have a glass of wine tonight.\"}], \"metadata\": {\"usage\": {\"inputTokens\": 1512, \"outputTokens\": 15, \"totalTokens\": 1527}, \"metrics\": {\"latencyMs\": 2495, \"timeToFirstByteMs\": 3228}}, \"tracking_id\": \"d1ef4d35-2cd5-44d7-9e3b-f7c3f04db931\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:49.123813+00:00\", \"updated_at\": \"2026-10-27T03:40:49.123835+00:00\"}"
+                        },
+                        "role": "ASSISTANT"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072445776#685c5bcd",
+            "eventTimestamp": "2026-10-26T23:40:45.776000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:40:45.775203+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072445641#0bc7e313",
+            "eventTimestamp": "2026-10-26T23:40:45.641000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"text\": \"what did i just ask you?\"}], \"tracking_id\": \"10288e93-7d68-4475-a455-08fff98f19ac\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:45.641256+00:00\", \"updated_at\": \"2026-10-27T03:40:45.641274+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072431779#17c1a410",
+            "eventTimestamp": "2026-10-26T23:40:31.779000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"assistant\", \"content\": [{\"text\": \"The participant guide for your trial states: *avoid alcohol for the duration of the study.*\\n\\nSo a glass of wine tonight wouldn't be recommended. If you have questions about why or want to discuss it further, reach out to your study team directly. \\ud83d\\ude0a\"}], \"metadata\": {\"usage\": {\"inputTokens\": 1445, \"outputTokens\": 57, \"totalTokens\": 1502}, \"metrics\": {\"latencyMs\": 3924, \"timeToFirstByteMs\": 3276}}, \"tracking_id\": \"eda34165-7204-4bd9-9c07-57d2f26af7d6\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:31.779500+00:00\", \"updated_at\": \"2026-10-27T03:40:31.779531+00:00\"}"
+                        },
+                        "role": "ASSISTANT"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072427683#bba52e9e",
+            "eventTimestamp": "2026-10-26T23:40:27.683000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:40:27.683054+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072427528#a6f145c4",
+            "eventTimestamp": "2026-10-26T23:40:27.528000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"toolResult\": {\"toolUseId\": \"tooluse_A9UPMhj73JdKMyZPdcNg5Z\", \"status\": \"success\", \"content\": [{\"text\": \"# ZT-201 Participant Guide (fictional)\\n- Take one tablet daily at the same time, with or without food.\\n- Missed dose: if more than 4 hours late, skip it and take the next dose at the usual time. Never take two doses together.\\n- Vomiting: if you vomit within 30 minutes of a dose, do not take another tablet that day.\\n- Before the week-4 visit, do not eat for 8 hours. Water is fine.\\n- Alcohol: avoid alcohol for the duration of the study.\\n- Storage: keep tablets at room temperature, away from moisture.\"}]}}], \"tracking_id\": \"779e22ca-2020-4e35-b50b-708f47da14b3\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:27.528203+00:00\", \"updated_at\": \"2026-10-27T03:40:27.528212+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072427393#da27ad33",
+            "eventTimestamp": "2026-10-26T23:40:27.393000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"assistant\", \"content\": [{\"text\": \"Let me check the trial guidelines for you!\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_A9UPMhj73JdKMyZPdcNg5Z\", \"name\": \"search_trial_docs\", \"input\": {\"question\": \"Can participants drink alcohol or have wine during the trial?\"}}}], \"metadata\": {\"usage\": {\"inputTokens\": 1219, \"outputTokens\": 75, \"totalTokens\": 1294}, \"metrics\": {\"latencyMs\": 2133, \"timeToFirstByteMs\": 2435}}, \"tracking_id\": \"98484026-559d-4732-b149-ed3db5964423\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:27.393414+00:00\", \"updated_at\": \"2026-10-27T03:40:27.393443+00:00\"}"
+                        },
+                        "role": "ASSISTANT"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072424300#ba3bae17",
+            "eventTimestamp": "2026-10-26T23:40:24.300000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:40:24.299927+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072424178#7d4e5034",
+            "eventTimestamp": "2026-10-26T23:40:24.178000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"text\": \"Can I have a glass of wine tonight?\"}], \"tracking_id\": \"54f0ffcb-2e2e-4616-b89e-8bc0af3dbe48\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:24.178406+00:00\", \"updated_at\": \"2026-10-27T03:40:24.178409+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072410339#83a364af",
+            "eventTimestamp": "2026-10-26T23:40:10.339000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"assistant\", \"content\": [{\"text\": \"Hi James! According to your profile, you should take your medication at *8:00 AM* (Eastern Time) each day.\\n\\nLet me know if you have any other questions! \\ud83d\\ude0a\"}], \"metadata\": {\"usage\": {\"inputTokens\": 1162, \"outputTokens\": 45, \"totalTokens\": 1207}, \"metrics\": {\"latencyMs\": 1918, \"timeToFirstByteMs\": 4396}}, \"tracking_id\": \"71ee5a52-70b8-46cd-9519-8ebed23aabdd\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:10.339499+00:00\", \"updated_at\": \"2026-10-27T03:40:10.339528+00:00\"}"
+                        },
+                        "role": "ASSISTANT"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072405401#16d3bb8f",
+            "eventTimestamp": "2026-10-26T23:40:05.401000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:40:05.401712+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072405266#c41775e7",
+            "eventTimestamp": "2026-10-26T23:40:05.266000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"toolResult\": {\"toolUseId\": \"tooluse_t7yymTjrGAy2vMNWBmBzlv\", \"status\": \"success\", \"content\": [{\"text\": \"{\\\"name\\\": \\\"James\\\", \\\"trial_id\\\": \\\"ZT-201\\\", \\\"enrolled_on\\\": \\\"2026-10-18\\\", \\\"dose_times\\\": [\\\"08:00\\\"], \\\"timezone\\\": \\\"America/New_York\\\"}\"}]}}], \"tracking_id\": \"5e49431c-26f3-404d-9cda-f7732780390b\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:05.266788+00:00\", \"updated_at\": \"2026-10-27T03:40:05.266809+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072404219#14369bab",
+            "eventTimestamp": "2026-10-26T23:40:04.219000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"assistant\", \"content\": [{\"text\": \"Let me pull up your profile right away!\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_t7yymTjrGAy2vMNWBmBzlv\", \"name\": \"get_participant_profile\", \"input\": {}}}], \"metadata\": {\"usage\": {\"inputTokens\": 1052, \"outputTokens\": 48, \"totalTokens\": 1100}, \"metrics\": {\"latencyMs\": 1450, \"timeToFirstByteMs\": 2003}}, \"tracking_id\": \"18a08226-c48c-450f-a05b-dc0db33202d3\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:04.219979+00:00\", \"updated_at\": \"2026-10-27T03:40:04.219999+00:00\"}"
+                        },
+                        "role": "ASSISTANT"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072401827#e3e9c1d9",
+            "eventTimestamp": "2026-10-26T23:40:01.827000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:40:01.827076+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072401707#9ece1245",
+            "eventTimestamp": "2026-10-26T23:40:01.707000-04:00",
+            "payload": [
+                {
+                    "conversational": {
+                        "content": {
+                            "text": "{\"message\": {\"role\": \"user\", \"content\": [{\"text\": \"What time should I take my medication?\"}], \"tracking_id\": \"f1c7eae4-3d42-46fc-b4c7-717162792314\"}, \"message_id\": 0, \"redact_message\": null, \"created_at\": \"2026-10-27T03:40:01.707503+00:00\", \"updated_at\": \"2026-10-27T03:40:01.707508+00:00\"}"
+                        },
+                        "role": "USER"
+                    }
+                }
+            ],
+            "branch": {
+                "name": "main"
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072401570#a9919e36",
+            "eventTimestamp": "2026-10-26T23:40:01.570000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"agent_id\": \"default\", \"state\": {\"participant_id\": \"P001\"}, \"conversation_manager_state\": {\"__name__\": \"SlidingWindowConversationManager\", \"removed_message_count\": 0, \"model_call_count\": 0}, \"_internal_state\": {\"interrupt_state\": {\"interrupts\": {}, \"context\": {}, \"activated\": false}, \"model_state\": {}}, \"created_at\": \"2026-10-27T03:40:01.570159+00:00\", \"updated_at\": \"2026-10-27T03:40:01.570165+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "agentId": {
+                    "stringValue": "default"
+                },
+                "stateType": {
+                    "stringValue": "AGENT"
+                }
+            }
+        },
+        {
+            "memoryId": "trial_agent_memory-LfUMHsApOY",
+            "actorId": "P001",
+            "sessionId": "participant-P001",
+            "eventId": "0000001793072401339#d5b5ec51",
+            "eventTimestamp": "2026-10-26T23:40:01.339000-04:00",
+            "payload": [
+                {
+                    "blob": "{\"session_id\": \"participant-P001\", \"session_type\": \"AGENT\", \"created_at\": \"2026-10-27T03:40:01.339613+00:00\", \"updated_at\": \"2026-10-27T03:40:01.339631+00:00\"}"
+                }
+            ],
+            "branch": {
+                "name": "main"
+            },
+            "metadata": {
+                "stateType": {
+                    "stringValue": "SESSION"
+                }
+            }
+        }
+    ]
+}

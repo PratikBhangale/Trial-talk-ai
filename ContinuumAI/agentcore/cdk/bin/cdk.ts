@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { AgentCoreStack, type HarnessConfig } from '../lib/cdk-stack';
 import { ConfigIO, HarnessSpecSchema, type AwsDeploymentTarget } from '@aws/agentcore-cdk';
-import { App, type Environment } from 'aws-cdk-lib';
+import { App,Tags, type Environment } from 'aws-cdk-lib';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -114,6 +114,7 @@ async function main() {
   }
 
   const app = new App();
+  Tags.of(app).add('hackathon', 'true');
 
   for (const target of targets) {
     const env = toEnvironment(target);

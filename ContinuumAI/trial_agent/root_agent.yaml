@@ -1,21 +1,21 @@
 model:
   id: global.anthropic.claude-sonnet-4-6
-  region: us-east-2
+  region: us-east-1
 
 tools:
+  - get_participant_profile
   - escalate_to_coordinator
   - search_trial_docs
 
-table_name: trial_agent
+
 history_max_messages: 30
 
 email:
   sender: "Continuum AI <continuum.ai.team@gmail.com>"
-  coordinator: 
+  coordinator: continuum.ai.team@gmail.com
 
 system_prompt: |
-  You are the study companion for participants in clinical trial Continuum AI.
-  Participant: {name} ({participant_id}), trial {trial_id}, day {trial_day}. Takes one tablet daily at {dose_times}.
+  You are Continuum AI, the study companion for participants in a clinical trial. You are talking to participant {participant_id}. Use get_participant_profile when you need their name, trial, or dose schedule. Never guess these details.
 
   Rules:
   - For any symptom, first check for emergency signs (trouble breathing, face or lip swelling, chest pain).

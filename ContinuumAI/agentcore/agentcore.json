@@ -5,10 +5,11 @@
   "managedBy": "CDK",
   "tags": {
     "agentcore:created-by": "agentcore-cli",
-    "agentcore:project-name": "ContinuumAI"
+    "agentcore:project-name": "ContinuumAI",
+    "hackathon": "true"
   },
   "runtimes": [
-    {
+        {
       "name": "trial_agent",
       "build": "CodeZip",
       "entrypoint": "app.py",
@@ -16,9 +17,16 @@
       "runtimeVersion": "PYTHON_3_12",
       "networkMode": "PUBLIC",
       "protocol": "HTTP",
-      "additionalPolicies": ["runtime-policy.json"]
+      "additionalPolicies": ["runtime-policy.json"],
+      "envVars": [
+        {"name": "MEMORY_ID", "value": "trial_agent_memory-LfUMHsApOY"},
+        {"name": "DB_CLUSTER_ARN", "value": "arn:aws:rds:us-east-1:180026596905:cluster:trialtalk"},
+        {"name": "DB_SECRET_ARN", "value": "arn:aws:secretsmanager:us-east-1:180026596905:secret:trialtalk/db/tt_agent-fKlPne"},
+        {"name": "DB_NAME", "value": "trialtalk"}
+      ]
     }
   ],
+
   "memories": [],
   "knowledgeBases": [],
   "credentials": [],

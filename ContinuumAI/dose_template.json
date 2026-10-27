@@ -1,0 +1,20 @@
+{
+  "name": "dose_reminder_v2",
+  "language": "en",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hi! It's time for your {{1}} dose of your study medication. Please tap a button below to let your study team know.",
+      "example": { "body_text": [["evening"]] }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Taken" },
+        { "type": "QUICK_REPLY", "text": "Skipped" },
+        { "type": "QUICK_REPLY", "text": "Remind me in 30 min" }
+      ]
+    }
+  ]
+}
