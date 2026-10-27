@@ -105,10 +105,8 @@ CREATE INDEX ON trial.clinical_events (record_type, status);
 -- and current_events never returns two "latest" rows.
 CREATE UNIQUE INDEX clinical_events_supersedes_once
   ON trial.clinical_events (supersedes_event_id) WHERE supersedes_event_id IS NOT NULL;
-
-CREATE VIEW trial.current_events WITH (security_invoker = true) AS
-SELECT e.* FROM trial.clinical_events e
-WHERE NOT EXISTS (SELECT 1 FROM trial.clinical_events n WHERE n.supersedes_event_id = e.event_id);
+-- trial.current_events is created at the end of section 4, after the last column is added:
+-- a view's e.* is fixed when the view is created.
 
 ------------------------------------------------------------------------------
 -- 3. trial.communications
@@ -208,6 +206,11 @@ CREATE INDEX ON trial.reminders (status, next_send_at);
 -- Link sends and dose responses back to the reminder
 ALTER TABLE trial.communications  ADD COLUMN reminder_id uuid REFERENCES trial.reminders(reminder_id);
 ALTER TABLE trial.clinical_events ADD COLUMN reminder_id uuid REFERENCES trial.reminders(reminder_id);
+
+-- Latest version of each clinical record. Created after all clinical_events columns exist.
+CREATE VIEW trial.current_events WITH (security_invoker = true) AS
+SELECT e.* FROM trial.clinical_events e
+WHERE NOT EXISTS (SELECT 1 FROM trial.clinical_events n WHERE n.supersedes_event_id = e.event_id);
 -- Router matches a button reply to "latest message with that reminder_id"
 CREATE INDEX ON trial.communications (reminder_id, created_at DESC);
 CREATE INDEX ON trial.clinical_events (reminder_id);
