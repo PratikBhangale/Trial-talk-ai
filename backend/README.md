@@ -101,7 +101,12 @@ There is no admin group, portal or API. Any coordinator or PI can manage account
 | POST | `/staff/accounts/{username}/enable` | Re-enable |
 | POST | `/staff/accounts/{username}/reset-password` | Cognito emails a reset code |
 
-Everyone needs a role and at least one site. You can't disable your own account. Each change prints an `audit` line to CloudWatch. Note the consequence of dropping the admin tier: any staff member can invite a PI or grant sites. If that is too broad, restrict `accounts:manage` in `common/auth.py` to `PI`.
+Everyone needs a role and at least one site. Because database site access comes from these accounts, nobody can grant more than they hold:
+- You only see accounts that share a site with you, and only manage accounts whose sites are all yours.
+- You can only grant your own sites and studies. Only a PI can grant the PI role or change a PI's account.
+- You can't change your own role, sites or studies, or disable your own account. Your name you can change.
+
+Each change prints an `audit` line to CloudWatch.
 
 ### Observability (OpenTelemetry)
 
@@ -119,7 +124,7 @@ Everyone needs a role and at least one site. You can't disable your own account.
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET / PATCH | `/me` | Profile. Participants can edit email, address, language and time zone. Name, DOB and phone go through a request |
-| GET | `/me/reminders` | Active reminders, plus `dose_schedule` (label, instructions, "Every day at 8:00 PM") |
+| GET | `/me/reminders` | Active reminders, plus `dose_schedule` (label and "Every day at 8:00 PM"; db/ doesn't let participants read the dose instructions) |
 | GET | `/me/history?record_type=` | Own visits, doses, symptoms and consent questions (read-only) |
 | GET / POST | `/me/requests` | `{"kind": "reminder_change" \| "reminder_pause" \| "profile_change" \| "withdrawal" \| "whatsapp_opt_out" \| "contact_team" \| "history_correction", "message": "..."}`. Requests show up in `/staff/requests` |
 | POST | `/me/emergency` | The SOS button. An empty body is a complete request: it raises a `life_threatening` alert, emails the site team and returns the emergency instruction in the participant's language. Optional `message` and `severity` (`life_threatening` / `urgent` / `concern`) |
@@ -165,7 +170,9 @@ conda create -p .pg -c conda-forge python=3.12 postgresql=16 psycopg pytest tzda
 TT_PG_BIN=.pg/Library/bin .pg/python -m pytest backend/tests   # Linux/macOS: .pg/bin
 ```
 
-The integration tests swap the RDS Data API for a fake that runs each statement on the local server, logged in as the same database user the Lambda would use. That means grants, RLS and `set_config` scoping all get exercised, not mocked. The fakes and the Postgres setup are in `tests/local_env.py`.
+The integration tests swap the RDS Data API for a fake that runs each statement on the local server, logged in as the same database user the Lambda would use (`tt_portal`, `tt_participant`, `tt_messaging`). That means grants, RLS and `set_config` scoping all get exercised, not mocked. The fakes and the Postgres setup are in `tests/local_env.py`.
+
+The local database is built from `db/01_schema.sql` and `db/02_roles_rls.sql`, the schema's source of truth, plus `tests/pending_db_additions.sql`. That last file holds what the participant website needs and db/ doesn't have yet: the `web` channel, participants reading their own web messages, web chat inserts and `trial.emergency_alerts`. It is applied locally only, never to Aurora. Without it, the chat, SOS, request and alert tests fail.
 
 ### Test portals (local, no AWS)
 
@@ -173,10 +180,12 @@ The integration tests swap the RDS Data API for a fake that runs each statement 
 TT_PG_BIN=.pg/Library/bin .pg/python backend/devserver/server.py      # then open http://127.0.0.1:8787
 ```
 
-The server starts a throwaway Postgres and seeds synthetic data:
-- one bootstrap staff user, `lead@example.org` (a coordinator at both sites), created the way you would in the Cognito console
-- three more staff users, invited through `/staff/accounts` as that user: a coordinator and a PI at RIVERSIDE, and a coordinator at LAKESIDE
-- participants P-1001…P-1004, three at RIVERSIDE and one at LAKESIDE
+The server starts a throwaway Postgres built the same way and seeds synthetic data:
+- `db/03_seed.sql`, the same rows as the deployed database: P-0142 (Maria Lopez) and P-0143 at RIVERSIDE, P-0201 at LAKEVIEW, with their visits, symptoms, an AE, dose history, reminders and messages. Their website logins and reminder schedules are created the way `staff_api` would have
+- one bootstrap staff user, `lead@example.org` (a PI at both sites), created the way you would in the Cognito console
+- three more staff users, invited through `/staff/accounts` as that user, named after the seed's records: `coordinator@riverside-clinic.org`, the PI `dr.patel@riverside-clinic.org`, and `coordinator@lakeview-health.org`
+
+Participants you enroll get the next free id after the highest one you can see (P-0144, …). db/ gives `participant_id` no default.
 
 Each portal is its own page, as it will be deployed:
 
@@ -196,7 +205,7 @@ Everything below API Gateway is real code against real RLS. Chat replies come fr
 1. Check AWS auth: `aws sts get-caller-identity` (account `461729033902`).
 2. Set the context in `infra/cdk.json`:
    - `whatsappPhoneNumberId` (the `phone-number-id-…` ARN of the WhatsApp number)
-   - `alertFrom` and `alertTo` (an SES-verified sender, plus the coordinator address)
+   - `alertFrom` (an SES-verified sender) and `alertTo`, the emergency email recipients per site as JSON: `{"RIVERSIDE": "coordinator@riverside-clinic.org", "LAKEVIEW": "coordinator@lakeview-health.org"}`. An alert only emails its own site. A `"*"` key emails every site's alerts to those addresses; use it only if one team covers all sites
    - `staffCallbackUrls` and `corsOrigins` for the portal URLs
 3. Deploy:
 
@@ -211,7 +220,7 @@ The first deploy creates Aurora and runs the migration (several minutes). Output
 
 ### Console steps (the plan leaves these to the console)
 
-- **The first staff user.** Create one user in the `trialtalk-staff` pool, add them to the `coordinator` or `PI` group and set `custom:site_ids` (e.g. `RIVERSIDE`) and `custom:study_ids` (e.g. `KOA-301`). After that, invite everyone else from the staff portal's Team widget (`/staff/accounts`).
+- **The first staff user.** Create one user in the `trialtalk-staff` pool, add them to the `PI` group and set `custom:site_ids` to every site (e.g. `RIVERSIDE,LAKEVIEW`) and `custom:study_ids` (e.g. `KOA-301`). Nobody can grant more than they hold, so this first user must hold everything the others will need. After that, invite everyone else from the staff portal's Team widget (`/staff/accounts`).
 - **WhatsApp templates**, IRB-approved, one per language:
   - `dose_reminder_v2`: utility, `{{1}}` dose label, `{{2}}` instructions, 3 quick-reply buttons
   - `visit_reminder_v1`

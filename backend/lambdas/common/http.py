@@ -4,6 +4,7 @@ import json
 import re
 import traceback
 from typing import Callable
+from urllib.parse import unquote
 
 from common import db, telemetry
 
@@ -79,7 +80,9 @@ class Router:
                 path_matched = True
                 if m == method:
                     claims = claims_fn(event)
-                    status, body = fn(event, claims, **match.groupdict())
+                    # rawPath keeps percent-encoding: a staff username arrives as name%40site.org
+                    params = {k: unquote(v) for k, v in match.groupdict().items()}
+                    status, body = fn(event, claims, **params)
                     return response(status, body)
             raise HttpError(405 if path_matched else 404, "Method not allowed" if path_matched else "Not found")
         except HttpError as e:
@@ -89,5 +92,15 @@ class Router:
                 return response(409, {"error": "A record with that value already exists"})
             if "row-level security" in str(e) or "permission denied" in str(e):
                 return response(403, {"error": "Forbidden"})
-            traceback.print_exc()
+            log_error(e)
             return response(500, {"error": "Internal error"})
+
+
+def log_error(e: Exception) -> None:
+    """Stack frames plus the error's type, SQLSTATE and constraint, never its message: Postgres puts the failing
+    row (name, phone, date of birth) in check and not-null errors, and logs sit outside the database's access rules."""
+    text = str(e)
+    state = getattr(e, "sqlstate", None) or next(iter(re.findall(r"SQLState: (\w+)", text)), None)
+    constraint = next(iter(re.findall(r'constraint "([\w.]+)"', text)), None)
+    print(f"Unhandled {type(e).__name__} sqlstate={state} constraint={constraint}")
+    traceback.print_tb(e.__traceback__)

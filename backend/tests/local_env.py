@@ -1,6 +1,7 @@
 """Local stand-ins for AWS, shared by the tests (conftest.py) and the dev server (devserver/server.py).
 
-start_postgres() runs a throwaway PostgreSQL 16 with the schema and the Lambdas' database logins.
+LocalPostgres runs a throwaway PostgreSQL 16 built from db/ (the schema's source of truth: tables, triggers,
+roles, RLS and the tt_* logins), plus pending_db_additions.sql for the features db/ has no room for yet.
 The Fake* classes replace the boto3 clients: FakeRdsData runs Data API calls on that server as the
 same login the Lambda would use, so grants and RLS are exercised for real.
 """
@@ -21,8 +22,15 @@ from decimal import Decimal
 from pathlib import Path
 
 LAMBDAS = Path(__file__).resolve().parents[1] / "lambdas"
-if str(LAMBDAS) not in sys.path:
-    sys.path.insert(0, str(LAMBDAS))
+DB_SQL = Path(__file__).resolve().parents[2] / "db"
+for _path in (LAMBDAS, DB_SQL):  # DB_SQL for run_sql.split_sql, the splitter written for those files
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+# Applied in order to a fresh database. db/ files are not idempotent (plain CREATE TABLE/ROLE/POLICY): once only.
+SCHEMA_FILES = [DB_SQL / "01_schema.sql", DB_SQL / "02_roles_rls.sql",
+                Path(__file__).with_name("pending_db_additions.sql")]
+SEED_FILE = DB_SQL / "03_seed.sql"
 
 # boto3 isn't needed locally; every AWS client is replaced with a fake.
 if "boto3" not in sys.modules:
@@ -34,8 +42,9 @@ if "boto3" not in sys.modules:
         _fake.resource = lambda *a, **k: None
         sys.modules["boto3"] = _fake
 
-LOGINS = {"staff": "staff_api", "participant": "participant_api", "messaging": "messaging_api"}
-PASSWORD = "test-password-123"
+# Fake secret ARN -> the db/02_roles_rls.sql login it stands for. The server trusts local connections,
+# so the CHANGE_ME passwords in that file are never used.
+LOGINS = {"staff": "tt_portal", "participant": "tt_participant", "messaging": "tt_messaging", "agent": "tt_agent"}
 
 
 # ------------------------------------------------------------------ throwaway Postgres
@@ -47,7 +56,7 @@ def _free_port() -> int:
 
 
 class LocalPostgres:
-    """initdb + pg_ctl start on a free port, schema applied (twice: it must be idempotent), logins created."""
+    """initdb + pg_ctl start on a free port, then SCHEMA_FILES (which also create the logins)."""
 
     def __init__(self, bin_dir: str):
         import psycopg
@@ -66,17 +75,9 @@ class LocalPostgres:
                 c.execute("CREATE DATABASE trialtalk")
             self.admin_dsn = admin + " dbname=trialtalk"
 
-            from migrate.handler import LOGIN_ROLES, split_sql
-            schema = (LAMBDAS / "migrate" / "schema.sql").read_text()
             with psycopg.connect(self.admin_dsn, autocommit=True) as c:
-                for _ in range(2):
-                    for stmt in split_sql(schema):
-                        c.execute(stmt)
-                for login, role in LOGIN_ROLES.items():
-                    c.execute(f"DO $$ BEGIN CREATE ROLE {login} LOGIN; "
-                              "EXCEPTION WHEN duplicate_object THEN NULL; END $$")
-                    c.execute(f"ALTER ROLE {login} WITH LOGIN PASSWORD '{PASSWORD}'")
-                    c.execute(f"GRANT {role} TO {login}")
+                for path in SCHEMA_FILES:
+                    run_sql_file(c, path)
         except BaseException:
             self.stop()
             raise
@@ -88,6 +89,21 @@ class LocalPostgres:
         subprocess.run([self._exe("pg_ctl"), "-D", str(self.data), "-m", "fast", "stop"],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         shutil.rmtree(self.data, ignore_errors=True)
+
+
+def run_sql_file(conn, path: Path) -> None:
+    from run_sql import split_sql
+    for stmt in split_sql(path.read_text(encoding="utf-8")):
+        conn.execute(stmt)
+
+
+def wipe(conn) -> None:
+    """Delete all data, as the superuser. db/'s append-only trigger blocks TRUNCATE even for the owner, so it is
+    switched off for this one transaction. Local throwaway databases only; never do this to Aurora."""
+    with conn.transaction():
+        conn.execute("ALTER TABLE trial.clinical_events DISABLE TRIGGER clinical_events_no_truncate")
+        conn.execute("TRUNCATE trial.clinical_events, trial.communications, trial.reminders, pii.participants CASCADE")
+        conn.execute("ALTER TABLE trial.clinical_events ENABLE TRIGGER clinical_events_no_truncate")
 
 
 # ------------------------------------------------------------------ fake RDS Data API
@@ -128,7 +144,7 @@ class FakeRdsData:
     def _connect(self, secret: str):
         import psycopg
         user = LOGINS[secret]
-        conn = psycopg.connect(f"host=127.0.0.1 port={self.port} dbname=trialtalk user={user} password={PASSWORD}")
+        conn = psycopg.connect(f"host=127.0.0.1 port={self.port} dbname=trialtalk user={user}")
         conn.execute("SET timezone = 'UTC'")
         conn.commit()
         return conn

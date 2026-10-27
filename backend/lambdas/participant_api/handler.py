@@ -18,7 +18,23 @@ from common.http import HttpError, Router, json_body, query_params
 
 AGENT_RUNTIME_ARN = os.environ.get("AGENT_RUNTIME_ARN", "")
 ALERT_FROM = os.environ.get("ALERT_FROM", "")
-ALERT_TO = [a for a in os.environ.get("ALERT_TO", "").split(",") if a]
+
+
+def _recipients_by_site(raw: str) -> dict[str, list[str]]:
+    """ALERT_TO is JSON, site -> addresses: {"RIVERSIDE": "a@x.org,b@x.org", "LAKEVIEW": "c@y.org"}.
+    The key "*" sends every site's alerts to those addresses; use it only when one team covers all sites."""
+    try:
+        sites = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        sites = None
+    if not isinstance(sites, dict):
+        print("ALERT_TO must be a JSON object of site -> addresses; emergency emails are off")
+        return {}
+    return {site: [a.strip() for a in (v if isinstance(v, list) else str(v).split(",")) if a.strip()]
+            for site, v in sites.items()}
+
+
+ALERT_TO = _recipients_by_site(os.environ.get("ALERT_TO", ""))
 MAX_CHAT_CHARS = 1000
 
 AGENT_ERROR_REPLY = ("Sorry, something went wrong on my side. If this is urgent, please contact your "
@@ -98,17 +114,17 @@ def update_me(event, me: Participant):
 
 @router.route("GET", "/me/reminders")
 def my_reminders(event, me: Participant):
-    """Active reminders and dose schedule. Staff own reminders; participants can only request changes."""
+    """Active reminders and dose schedule. Staff own reminders; participants can only request changes.
+
+    db/ does not let participant_role read template_params, so the dose instructions are not shown here.
+    """
     with scoped(me) as t:
         rows = t.query(
-            "SELECT reminder_id, label, reminder_type, template_params, cron_expr, send_at, timezone, starts_on,"
+            "SELECT reminder_id, label, reminder_type, cron_expr, send_at, timezone, starts_on,"
             "  ends_on, status, next_send_at FROM trial.reminders "
             "WHERE participant_id = :pid AND status IN ('active','paused') ORDER BY next_send_at NULLS LAST",
             pid=me.participant_id)
     for r in rows:
-        params = r.pop("template_params") or {}
-        if r["reminder_type"] == "dose":
-            r["dose"] = {"label": params.get("1"), "instructions": params.get("2")}
         r["schedule"] = describe_schedule(r)
     doses = [r for r in rows if r["reminder_type"] == "dose"]
     return 200, {"reminders": rows, "dose_schedule": doses}
@@ -131,12 +147,15 @@ def describe_schedule(r: dict) -> str:
 
 @router.route("GET", "/me/history")
 def my_history(event, me: Participant):
-    """Own check-ins, doses, visits and symptoms, in the participant's own words. Read-only."""
+    """Own check-ins, doses, visits and symptoms, in the participant's own words. Read-only.
+
+    Only the columns db/ grants participant_role (no dose_label).
+    """
     rt = query_params(event).get("record_type")
     with scoped(me) as t:
         rows = t.query(
             "SELECT e.event_id, e.record_type, e.status, e.occurred_at, e.verbatim_text, e.pain_score_band,"
-            "  e.body_location, e.onset_date, e.visit_code, e.dose_label, e.scheduled_at, e.window_start,"
+            "  e.body_location, e.onset_date, e.visit_code, e.scheduled_at, e.window_start,"
             "  e.window_end, e.response, e.response_text "
             "FROM trial.clinical_events e "
             "WHERE NOT EXISTS (SELECT 1 FROM trial.clinical_events n WHERE n.supersedes_event_id = e.event_id) "
@@ -147,7 +166,10 @@ def my_history(event, me: Participant):
 
 @router.route("POST", "/me/requests")
 def create_request(event, me: Participant):
-    """Requests (profile change, reminder time change or pause, withdrawal...) go to the staff queue."""
+    """Requests (profile change, reminder time change or pause, withdrawal...) go to the staff queue.
+
+    No RETURNING: db/ gives participant_role no SELECT on communications, so the new row can't be read back.
+    """
     body = json_body(event)
     kind = body.get("kind")
     text = (body.get("message") or "").strip()
@@ -155,12 +177,13 @@ def create_request(event, me: Participant):
         raise HttpError(400, f"kind must be one of {sorted(REQUEST_KINDS)}")
     if not text:
         raise HttpError(400, "message is required")
+    subject = f"[TT {me.participant_id}] {kind}"
     with scoped(me) as t:
-        row = t.one(
+        t.execute(
             "INSERT INTO trial.communications (participant_id, channel, direction, msg_type, subject, body_text) "
-            "VALUES (:pid, 'web', 'inbound', 'participant_request', :subject, :body) RETURNING comm_id, created_at",
-            pid=me.participant_id, subject=f"[TT {me.participant_id}] {kind}", body=text[:4000])
-    return 201, {"request": row}
+            "VALUES (:pid, 'web', 'inbound', 'participant_request', :subject, :body)",
+            pid=me.participant_id, subject=subject, body=text[:4000])
+    return 201, {"request": {"kind": kind, "subject": subject}}
 
 
 @router.route("GET", "/me/requests")
@@ -172,9 +195,9 @@ def list_requests(event, me: Participant):
             "WHERE participant_id = :pid AND msg_type = 'participant_request' ORDER BY created_at DESC LIMIT 50",
             pid=me.participant_id)
         replies = t.query(
-            "SELECT comm_id, reply_to_comm_id, body_text, created_at FROM trial.communications "
-            "WHERE participant_id = :pid AND msg_type = 'staff_reply' ORDER BY created_at",
-            pid=me.participant_id)
+            "SELECT comm_id, parsed_action->>'reply_to_comm_id' AS reply_to_comm_id, body_text, created_at "
+            "FROM trial.communications WHERE participant_id = :pid AND msg_type = 'request_reply' "
+            "ORDER BY created_at", pid=me.participant_id)
     for r in rows:
         r["replies"] = [{"body_text": x["body_text"], "created_at": x["created_at"]}
                         for x in replies if x["reply_to_comm_id"] == r["comm_id"]]
@@ -331,14 +354,18 @@ def _log(t: db.Tx, pid: str, direction: str, text: str, session_id: str, latency
 
 
 def _alert_team(p: dict, hits: list[str], severity: str) -> None:
-    """Immediate email to the site team. No diagnosis or message content in the email, just the flag."""
-    if not (ALERT_FROM and ALERT_TO):
-        print(f"EMERGENCY alert for {p['participant_id']} but ALERT_FROM/ALERT_TO not configured")
+    """Immediate email to the participant's own site team. No diagnosis or message content, just the flag.
+
+    Never falls back to another site's addresses; with no recipients the alert still shows in the staff widget.
+    """
+    to = ALERT_TO.get(p["site_id"]) or ALERT_TO.get("*")
+    if not (ALERT_FROM and to):
+        print(f"EMERGENCY alert for {p['participant_id']} but no ALERT_TO addresses for site {p['site_id']}")
         return
     try:
         ses().send_email(
             FromEmailAddress=ALERT_FROM,
-            Destination={"ToAddresses": ALERT_TO},
+            Destination={"ToAddresses": to},
             Content={"Simple": {
                 "Subject": {"Data": f"[TT {p['participant_id']} URGENT] Emergency alert ({severity})"},
                 "Body": {"Text": {"Data": (

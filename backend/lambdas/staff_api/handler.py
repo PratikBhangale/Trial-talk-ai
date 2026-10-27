@@ -66,6 +66,7 @@ IDENTITY = {"full_name", "date_of_birth", "phone_e164"}  # changes need a change
 STATUSES = {"prospect", "screening", "enrolled", "screen_failed"}  # 'withdrawn' only through DELETE
 REMINDER_TYPES = {"dose", "visit", "diary", "custom"}
 OPEN_REMINDER = ("draft", "active", "paused")
+ID_ATTEMPTS = 50  # ids tried past the highest one this user can see before giving up
 
 
 def get_participant(t: db.Tx, pid: str) -> dict:
@@ -157,23 +158,35 @@ def create_participant(event, staff: Staff):
     if status not in STATUSES:
         raise HttpError(400, f"status must be one of {sorted(STATUSES)}")
     opt_in = bool(body.get("whatsapp_opt_in", False))
+    values = dict(
+        full_name=body["full_name"].strip(), email=body.get("email"), phone=_phone(body["phone_e164"]),
+        dob=body.get("date_of_birth"), a1=body.get("address_line1"), a2=body.get("address_line2"),
+        city=body.get("city"), state=body.get("state"), postal=body.get("postal_code"),
+        country=body.get("country"), radius=body.get("travel_radius_miles"),
+        lang=body.get("preferred_language"), tz=_tz(body["timezone"]) if body.get("timezone") else None,
+        study=body["study_id"], site=body["site_id"], status=status, opt_in=opt_in,
+    )
 
     with db.tx(site_ids=staff.site_ids) as t:
-        row = t.one(
-            "INSERT INTO pii.participants (full_name, email, phone_e164, date_of_birth, address_line1, address_line2,"
-            "  city, state, postal_code, country, travel_radius_miles, preferred_language, timezone, study_id, site_id,"
-            "  status, whatsapp_opt_in, opt_in_at) "
-            "VALUES (:full_name, :email, :phone, :dob::date, :a1, :a2, :city, :state, :postal, coalesce(:country, 'US'),"
-            "  :radius, coalesce(:lang, 'en'), coalesce(:tz, 'America/New_York'), :study, :site, :status, :opt_in,"
-            "  CASE WHEN :opt_in THEN now() END) "
-            "RETURNING participant_id",
-            full_name=body["full_name"].strip(), email=body.get("email"), phone=_phone(body["phone_e164"]),
-            dob=body.get("date_of_birth"), a1=body.get("address_line1"), a2=body.get("address_line2"),
-            city=body.get("city"), state=body.get("state"), postal=body.get("postal_code"),
-            country=body.get("country"), radius=body.get("travel_radius_miles"),
-            lang=body.get("preferred_language"), tz=_tz(body["timezone"]) if body.get("timezone") else None,
-            study=body["study_id"], site=body["site_id"], status=status, opt_in=opt_in,
-        )
+        # participant_id has no default in db/. Start after the highest id this user can see; RLS hides other
+        # sites' ids, so a taken one comes back as no row (ON CONFLICT DO NOTHING) and the next is tried.
+        start = t.one("SELECT coalesce(max(substring(participant_id from 3)::int), 1000) AS n "
+                      "FROM pii.participants WHERE participant_id ~ '^P-[0-9]+$'")["n"]
+        for n in range(start + 1, start + 1 + ID_ATTEMPTS):
+            row = t.one(
+                "INSERT INTO pii.participants (participant_id, full_name, email, phone_e164, date_of_birth,"
+                "  address_line1, address_line2, city, state, postal_code, country, travel_radius_miles,"
+                "  preferred_language, timezone, study_id, site_id, status, whatsapp_opt_in, opt_in_at) "
+                "VALUES (:pid, :full_name, :email, :phone, :dob::date, :a1, :a2, :city, :state, :postal,"
+                "  coalesce(:country, 'US'), :radius, coalesce(:lang, 'en'), coalesce(:tz, 'America/New_York'),"
+                "  :study, :site, :status, :opt_in, CASE WHEN :opt_in THEN now() END) "
+                "ON CONFLICT (participant_id) DO NOTHING RETURNING participant_id",
+                pid=f"P-{n:04d}", **values,
+            )
+            if row:
+                break
+        else:
+            raise HttpError(503, "Could not allocate a participant id; try again")
         participant = get_participant(t, row["participant_id"])
         if PARTICIPANT_POOL_ID:
             _create_login(participant)
@@ -303,8 +316,8 @@ def participant_events(event, staff: Staff, pid: str):
             "SELECT event_id, record_type, status, occurred_at, source, parent_event_id, verbatim_text, summary,"
             "  pain_score_band, body_location, onset_date, to_json(characteristics) AS characteristics, severity_hint,"
             "  reason_code, visit_code, dose_label, scheduled_at, window_start, window_end, response, response_text,"
-            "  ae_term, severity_grade, serious, relatedness, outcome, staff_notes, details, reminder_id,"
-            "  supersedes_event_id, change_reason, created_by, created_at "
+            "  ae_term, severity_grade, serious, relatedness, outcome, staff_notes, details,"
+            "  supersedes_event_id, change_reason, created_by, created_at "  # db/'s view predates reminder_id
             "FROM trial.current_events WHERE participant_id = :pid "
             "  AND (:rt::text IS NULL OR record_type = :rt) "
             "ORDER BY occurred_at DESC LIMIT 200",
@@ -351,9 +364,9 @@ def participant_requests(event, staff: Staff):
             "WHERE c.msg_type = 'participant_request' AND c.created_at > now() - interval '30 days' "
             "ORDER BY c.created_at DESC LIMIT 100")
         replies = t.query(
-            "SELECT r.comm_id, r.reply_to_comm_id, r.body_text, r.from_addr, r.created_at "
-            "FROM trial.communications r WHERE r.msg_type = 'staff_reply' "
-            "  AND r.reply_to_comm_id = ANY (SELECT comm_id FROM trial.communications "
+            "SELECT r.comm_id, r.parsed_action->>'reply_to_comm_id' AS reply_to_comm_id, r.body_text, r.from_addr,"
+            "  r.created_at FROM trial.communications r WHERE r.msg_type = 'request_reply' "
+            "  AND r.parsed_action->>'reply_to_comm_id' IN (SELECT comm_id::text FROM trial.communications "
             "    WHERE msg_type = 'participant_request' AND created_at > now() - interval '30 days') "
             "ORDER BY r.created_at")
     for r in rows:
@@ -366,7 +379,10 @@ def participant_requests(event, staff: Staff):
 @router.route("POST", "/staff/requests/{cid}/reply")
 def reply_to_request(event, staff: Staff, cid: str):
     """Answer a participant request (a one-click quick reply or a longer message). The participant sees it
-    under their request on the website. More than one reply is allowed."""
+    under their request on the website. More than one reply is allowed.
+
+    db/ has no reply column, so the link to the request goes in parsed_action. msg_type is 'request_reply', not
+    'staff_reply': db/ uses that for inbound staff emails (e.g. the PI answering an AE report)."""
     require(staff, "requests:write")
     _uuid(cid)
     text = (json_body(event).get("text") or "").strip()
@@ -381,9 +397,10 @@ def reply_to_request(event, staff: Staff, cid: str):
             raise HttpError(404, "Request not found")
         reply = t.one(
             "INSERT INTO trial.communications (participant_id, channel, direction, msg_type, subject, body_text,"
-            "  from_addr, reply_to_comm_id) VALUES (:pid, 'web', 'outbound', 'staff_reply', :subject, :body,"
-            "  :by, :rid::uuid) RETURNING comm_id, body_text, from_addr, created_at",
-            pid=req["participant_id"], subject="Re: " + (req["subject"] or ""), body=text, by=staff.email, rid=cid)
+            "  from_addr, parsed_action) VALUES (:pid, 'web', 'outbound', 'request_reply', :subject, :body,"
+            "  :by, :action::jsonb) RETURNING comm_id, body_text, from_addr, created_at",
+            pid=req["participant_id"], subject="Re: " + (req["subject"] or ""), body=text, by=staff.email,
+            action={"reply_to_comm_id": req["comm_id"]})  # as the database spells it, not the URL
         _audit(staff, "request.reply", request_id=cid, participant_id=req["participant_id"])
     return 201, {"reply": reply}
 

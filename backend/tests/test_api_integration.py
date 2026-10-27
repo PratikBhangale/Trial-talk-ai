@@ -46,8 +46,16 @@ def test_rls_blocks_cross_site_insert_even_if_api_check_missed(aws, monkeypatch)
     monkeypatch.setattr(db, "SECRET_ARN", "staff")
     with pytest.raises(Exception, match="row-level security"):
         with db.tx(site_ids=["LAKESIDE"]) as t:
-            t.execute("INSERT INTO pii.participants (full_name, phone_e164, study_id, site_id, status) "
-                      "VALUES ('X', '+15550000001', 'KOA-301', 'RIVERSIDE', 'enrolled')")
+            t.execute("INSERT INTO pii.participants (participant_id, full_name, phone_e164, study_id, site_id, status) "
+                      "VALUES ('P-9001', 'X', '+15550000001', 'KOA-301', 'RIVERSIDE', 'enrolled')")
+
+
+def test_ids_skip_ones_taken_at_sites_you_cannot_see(call_staff):
+    """db/ has no id default: staff_api picks the next id, but RLS hides other sites' ids from it."""
+    assert enroll(call_staff) == "P-1001"
+    status, body = call_staff("POST", "/staff/participants", {**MARIA, "phone_e164": "+17325550150",
+                                                              "site_id": "LAKESIDE"}, claims=OTHER_SITE_CLAIMS)
+    assert status == 201 and body["participant"]["participant_id"] == "P-1002"  # P-1001 was invisible but taken
 
 
 def test_duplicate_phone_is_409(call_staff):
@@ -148,6 +156,8 @@ def test_send_now_sends_template_and_logs_dose(call_staff, aws, admin):
 
     status, body = call_staff("GET", f"/staff/participants/{pid}/adherence")
     assert body["counts"] == {"no_response": 1} and body["taken_rate"] == 0
+    status, body = call_staff("GET", f"/staff/participants/{pid}/events")
+    assert status == 200 and [(e["record_type"], e["dose_label"]) for e in body["events"]] == [("DOSE", "evening")]
 
 
 def test_clinical_events_are_append_only(aws, admin, call_staff, monkeypatch):
@@ -180,9 +190,9 @@ def test_participant_sees_own_profile_reminders_and_dose_schedule(call_staff, ca
     status, body = call_participant(pid, "GET", "/me/reminders")
     assert status == 200 and len(body["reminders"]) == 1
     dose = body["dose_schedule"][0]
-    assert dose["dose"] == {"label": "evening", "instructions": "1 tablet with food"}
-    assert dose["schedule"] == "Every day at 8:00 PM"
-    assert "change_log" not in dose and "template_name" not in dose
+    assert dose["label"] == "Evening dose" and dose["schedule"] == "Every day at 8:00 PM"
+    # db/ keeps template_params (the dose instructions) from participants, along with the staff-only columns
+    assert not {"template_params", "change_log", "template_name"} & dose.keys()
 
 
 def test_participant_can_edit_contact_but_not_identity(call_staff, call_participant):

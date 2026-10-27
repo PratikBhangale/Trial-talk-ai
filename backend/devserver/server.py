@@ -2,7 +2,8 @@
 
     TT_PG_BIN=<folder with initdb/pg_ctl> python backend/devserver/server.py [--port 8787] [--real-agent]
 
-Starts a throwaway PostgreSQL with the real schema, seeds synthetic staff and participants, and serves:
+Starts a throwaway PostgreSQL built from db/ (plus tests/pending_db_additions.sql), loads db/03_seed.sql, the
+same synthetic data as the deployed database, adds synthetic staff, and serves:
 
     /staff, /participant            one page per portal (ui/*.html), as they will be deployed separately
     /inspector                      dev only: what would have gone to AWS
@@ -36,7 +37,7 @@ UI = HERE / "ui"
 sys.path.insert(0, str(HERE.parent / "tests"))
 
 from local_env import (FakeAgentCore, fake_usage, FakeCognito, FakeRdsData, FakeScheduler,  # noqa: E402
-                       FakeWhatsApp, LocalPostgres)
+                       FakeWhatsApp, LocalPostgres, SEED_FILE, run_sql_file, wipe)
 
 from common import db, scheduling, telemetry, whatsapp  # noqa: E402
 from auth_triggers import staff_pre_token  # noqa: E402
@@ -52,32 +53,18 @@ TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8"}
 
 # The first staff user is created in the Cognito console (the plan leaves that to the console); every other
-# account is invited from the staff portal's Team panel (/staff/accounts), signed in as that first user.
-BOOTSTRAP_STAFF = {"email": "lead@example.org", "name": "Jamie Fox", "role": "coordinator",
-                   "site_ids": ["RIVERSIDE", "LAKESIDE"], "study_ids": ["KOA-301"]}
+# account is invited from the staff portal's Team panel (/staff/accounts), signed in as that first user. It is a PI
+# at every site: nobody can grant more than they hold, so the first user must hold everything the others will get.
+BOOTSTRAP_STAFF = {"email": "lead@example.org", "name": "Jamie Fox", "role": "PI",
+                   "site_ids": ["RIVERSIDE", "LAKEVIEW"], "study_ids": ["KOA-301"]}
+# The staff that db/03_seed.sql's records name (created_by, the AE report email), at its two sites.
 SEED_STAFF = [
-    {"email": "coordinator@riverside.example.org", "name": "Riley Chen", "role": "coordinator",
+    {"email": "coordinator@riverside-clinic.org", "name": "Riley Chen", "role": "coordinator",
      "site_ids": ["RIVERSIDE"], "study_ids": ["KOA-301"]},
-    {"email": "pi@riverside.example.org", "name": "Dr. Patel", "role": "PI",
+    {"email": "dr.patel@riverside-clinic.org", "name": "Dr. Patel", "role": "PI",
      "site_ids": ["RIVERSIDE"], "study_ids": ["KOA-301"]},
-    {"email": "coordinator@lakeside.example.org", "name": "Morgan Diaz", "role": "coordinator",
-     "site_ids": ["LAKESIDE"], "study_ids": ["KOA-301"]},
-]
-
-# Synthetic participants (555 numbers, example.org addresses). Never real PHI.
-SEED_PARTICIPANTS = [
-    ("coordinator@riverside.example.org", {
-        "full_name": "Alex Rivera", "phone_e164": "+17325550142", "email": "alex@example.org", "study_id": "KOA-301",
-        "site_id": "RIVERSIDE", "timezone": "America/New_York", "status": "enrolled", "whatsapp_opt_in": True}),
-    ("coordinator@riverside.example.org", {
-        "full_name": "Sam Ortiz", "phone_e164": "+17325550177", "preferred_language": "es", "study_id": "KOA-301",
-        "site_id": "RIVERSIDE", "timezone": "America/Chicago", "status": "enrolled", "whatsapp_opt_in": True}),
-    ("coordinator@riverside.example.org", {
-        "full_name": "Jordan Lee", "phone_e164": "+17325550188", "study_id": "KOA-301", "site_id": "RIVERSIDE",
-        "timezone": "America/New_York", "status": "screening", "whatsapp_opt_in": False}),
-    ("coordinator@lakeside.example.org", {
-        "full_name": "Taylor Brooks", "phone_e164": "+13125550101", "study_id": "KOA-301", "site_id": "LAKESIDE",
-        "timezone": "America/Chicago", "status": "enrolled", "whatsapp_opt_in": True}),
+    {"email": "coordinator@lakeview-health.org", "name": "Morgan Diaz", "role": "coordinator",
+     "site_ids": ["LAKEVIEW"], "study_ids": ["KOA-301"]},
 ]
 
 fakes = types.SimpleNamespace()
@@ -116,7 +103,9 @@ def wire(real_agent: bool) -> None:
     accounts.STAFF_POOL_ID = "local-staff-pool"
     telemetry.init()
     participant.ses = lambda: types.SimpleNamespace(send_email=lambda **kw: fakes.emails.append(kw))
-    participant.ALERT_FROM, participant.ALERT_TO = "alerts@example.org", ["coordinator@example.org"]
+    participant.ALERT_FROM = "alerts@example.org"
+    participant.ALERT_TO = {"RIVERSIDE": ["coordinator@riverside-clinic.org"],
+                            "LAKEVIEW": ["coordinator@lakeview-health.org"]}
     if real_agent:
         cdk = json.loads((HERE.parent / "infra" / "cdk.json").read_text())["context"]
         participant.AGENT_RUNTIME_ARN = cdk["agentRuntimeArn"]
@@ -187,8 +176,10 @@ def admin_query(sql: str, *args) -> list[dict]:
 
 
 def seed() -> None:
-    admin_query("TRUNCATE trial.clinical_events, trial.communications, trial.reminders, pii.participants CASCADE")
-    admin_query("ALTER SEQUENCE pii.participant_seq RESTART WITH 1001")
+    import psycopg
+    with psycopg.connect(pg.admin_dsn, autocommit=True) as c:
+        wipe(c)
+        run_sql_file(c, SEED_FILE)
     for f in (fakes.scheduler.schedules, fakes.emails, fakes.whatsapp.sent, fakes.agent.calls):
         f.clear()
     fakes.participant_pool.__init__()
@@ -207,22 +198,16 @@ def seed() -> None:
         assert status == 201, out
         pool.admin_set_user_password(Username=user["email"])  # as if they finished first sign-in
 
-    pids = []
-    for who, body in SEED_PARTICIPANTS:
-        status, out = call_handler(staff, "staff", staff_token(who), "POST", "/staff/participants",
-                                   json.dumps(body).encode(), {})
-        assert status == 201, out
-        pids.append(out["participant"]["participant_id"])
-    coord = staff_token("coordinator@riverside.example.org")
-    status, out = call_handler(staff, "staff", coord, "POST", f"/staff/participants/{pids[0]}/reminders", json.dumps({
-        "reminder_type": "dose", "label": "Evening dose", "dose_label": "evening",
-        "dose_instructions": "1 tablet with food", "time": "20:00", "escalate_after_misses": 3,
-    }).encode(), {})
-    assert status == 201, out
-    # One send, so the outbox, communications and DOSE timeline have something in them.
-    call_handler(staff, "staff", coord, "POST", f"/staff/reminders/{out['reminder']['reminder_id']}/send-now", None, {})
+    # What staff_api did for the seeded rows when they were created: website logins and reminder schedules.
+    participants = admin_query("SELECT participant_id, phone_e164 FROM pii.participants ORDER BY participant_id")
+    for p in participants:
+        staff._create_login(p)
+    for r in admin_query("SELECT reminder_id::text AS reminder_id, schedule_kind, cron_expr, send_at, timezone,"
+                         "  starts_on, ends_on, status FROM trial.reminders WHERE status = 'active'"):
+        scheduling.create(r)
     telemetry.reset()  # the window should start with the first thing you do, not the seeding
-    print(f"Seeded {1 + len(SEED_STAFF)} staff users, participants {', '.join(pids)}")
+    print(f"Seeded {1 + len(SEED_STAFF)} staff users, participants "
+          f"{', '.join(p['participant_id'] for p in participants)} (db/03_seed.sql)")
 
 
 def identities() -> dict:

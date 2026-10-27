@@ -1,8 +1,10 @@
 """Staff account management, inside the staff API: /staff/accounts. Cognito on the staff pool only.
 
 Staff are their own admins: any coordinator or PI can invite colleagues, change roles and sites, and disable
-accounts. There is no separate admin group or portal. These routes never touch participant data; they only call
-Cognito. Every change prints a structured audit line for CloudWatch.
+accounts, but never past their own access. They only see accounts that share a site with them, only manage accounts
+whose sites are all theirs, only grant their own sites and studies, only a PI grants PI, and nobody changes their own
+role, sites or studies. There is no separate admin group or portal. These routes never touch participant data; they
+only call Cognito. Every change prints a structured audit line for CloudWatch.
 """
 
 import json
@@ -96,6 +98,40 @@ def _not_self(staff: Staff, user: dict, what: str) -> None:
         raise HttpError(409, f"You cannot {what} your own account; ask a colleague")
 
 
+# Site access in the database (RLS on app.site_ids) comes from these accounts, so managing them must never widen
+# anyone's access past the manager's own: no self-grants, only your own sites and studies, no role above yours.
+ROLE_RANK = {"coordinator": 1, "PI": 2}
+
+
+def _visible(staff: Staff, user: dict) -> bool:
+    """Staff see the accounts that share a site with them."""
+    return bool(set(user["site_ids"]) & set(staff.site_ids))
+
+
+def _get_visible(staff: Staff, username: str) -> dict:
+    user = _get(username)
+    if not _visible(staff, user):
+        raise HttpError(404, "Staff user not found")  # same as missing: don't reveal other sites' staff
+    return user
+
+
+def _check_manage(staff: Staff, user: dict) -> None:
+    if not set(user["site_ids"]) <= set(staff.site_ids):
+        raise HttpError(403, "That account has sites outside yours; ask a colleague at those sites")
+    if ROLE_RANK.get(user["role"], 0) > ROLE_RANK[staff.role]:
+        raise HttpError(403, f"Only a {user['role']} can change a {user['role']}'s account")
+
+
+def _check_grant(staff: Staff, role: str, sites: list[str], studies: list[str]) -> None:
+    if ROLE_RANK[role] > ROLE_RANK[staff.role]:
+        raise HttpError(403, f"Only a {role} can grant the {role} role")
+    extra = set(sites) - set(staff.site_ids)
+    if extra:
+        raise HttpError(403, f"You can only grant your own sites, not {sorted(extra)}")
+    if staff.study_ids and (not studies or set(studies) - set(staff.study_ids)):  # empty = any study
+        raise HttpError(403, f"You can only grant your own studies: {staff.study_ids}")
+
+
 # ------------------------------------------------------------------ routes
 
 @router.route("GET", "/staff/accounts")
@@ -113,6 +149,7 @@ def list_accounts(event, staff: Staff):
         if not token or len(users) >= 600:
             break
     out = [_user(u, _groups(u["Username"])) for u in users]
+    out = [u for u in out if _visible(staff, u)]
     if q:
         out = [u for u in out if q in (u["email"] or "").lower() or q in (u["name"] or "").lower()
                or any(q in s.lower() for s in u["site_ids"])]
@@ -131,6 +168,7 @@ def create_account(event, staff: Staff):
     sites, studies = _ids(body.get("site_ids"), "site_ids"), _ids(body.get("study_ids"), "study_ids")
     if not sites:
         raise HttpError(400, "Coordinators and PIs need at least one site")
+    _check_grant(staff, role, sites, studies)
 
     attrs = [{"Name": "email", "Value": email}, {"Name": "email_verified", "Value": "true"},
              {"Name": "custom:site_ids", "Value": ",".join(sites)},
@@ -150,7 +188,7 @@ def create_account(event, staff: Staff):
 @router.route("GET", "/staff/accounts/{username}")
 def read_account(event, staff: Staff, username: str):
     require(staff, "accounts:manage")
-    return 200, {"user": _get(username)}
+    return 200, {"user": _get_visible(staff, username)}
 
 
 @router.route("PATCH", "/staff/accounts/{username}")
@@ -163,21 +201,29 @@ def update_account(event, staff: Staff, username: str):
         raise HttpError(400, f"Cannot update: {sorted(unknown)}")
     if not body:
         raise HttpError(400, "Nothing to update")
-    user = _get(username)
+    user = _get_visible(staff, username)
+    if user["email"] == staff.email and set(body) - {"name"}:
+        raise HttpError(409, "You cannot change your own role, sites or studies; ask a colleague")
+    if set(body) - {"name"}:
+        _check_manage(staff, user)
 
-    attrs = []
-    if "site_ids" in body:
-        attrs.append({"Name": "custom:site_ids", "Value": ",".join(_ids(body["site_ids"], "site_ids"))})
-    if "study_ids" in body:
-        attrs.append({"Name": "custom:study_ids", "Value": ",".join(_ids(body["study_ids"], "study_ids"))})
-    if "name" in body:
-        attrs.append({"Name": "name", "Value": str(body["name"] or "")[:128]})
+    sites = _ids(body["site_ids"], "site_ids") if "site_ids" in body else user["site_ids"]
+    studies = _ids(body["study_ids"], "study_ids") if "study_ids" in body else user["study_ids"]
     role = _role(body["role"]) if "role" in body else user["role"]
     if not role:
         raise HttpError(400, "A user needs a role; disable the account instead")
-    sites_after = next((a["Value"] for a in attrs if a["Name"] == "custom:site_ids"), ",".join(user["site_ids"]))
-    if not sites_after:
+    if not sites:
         raise HttpError(400, "Coordinators and PIs need at least one site")
+    if set(body) - {"name"}:
+        _check_grant(staff, role, sites, studies)
+
+    attrs = []
+    if "site_ids" in body:
+        attrs.append({"Name": "custom:site_ids", "Value": ",".join(sites)})
+    if "study_ids" in body:
+        attrs.append({"Name": "custom:study_ids", "Value": ",".join(studies)})
+    if "name" in body:
+        attrs.append({"Name": "name", "Value": str(body["name"] or "")[:128]})
 
     if attrs:
         cognito().admin_update_user_attributes(UserPoolId=STAFF_POOL_ID, Username=username, UserAttributes=attrs)
@@ -190,8 +236,9 @@ def update_account(event, staff: Staff, username: str):
 def disable_account(event, staff: Staff, username: str):
     """Blocks sign-in and revokes refresh tokens. Issued ID tokens still work until they expire (60 min)."""
     require(staff, "accounts:manage")
-    user = _get(username)
+    user = _get_visible(staff, username)
     _not_self(staff, user, "disable")
+    _check_manage(staff, user)
     cognito().admin_disable_user(UserPoolId=STAFF_POOL_ID, Username=username)
     cognito().admin_user_global_sign_out(UserPoolId=STAFF_POOL_ID, Username=username)
     _audit(staff, "account.disable", user=user["email"], reason=json_body(event).get("reason"))
@@ -201,7 +248,8 @@ def disable_account(event, staff: Staff, username: str):
 @router.route("POST", "/staff/accounts/{username}/enable")
 def enable_account(event, staff: Staff, username: str):
     require(staff, "accounts:manage")
-    user = _get(username)
+    user = _get_visible(staff, username)
+    _check_manage(staff, user)
     cognito().admin_enable_user(UserPoolId=STAFF_POOL_ID, Username=username)
     _audit(staff, "account.enable", user=user["email"])
     return 200, {"user": _get(username)}
@@ -211,7 +259,8 @@ def enable_account(event, staff: Staff, username: str):
 def reset_password(event, staff: Staff, username: str):
     """Cognito emails a reset code; the user must set a new password at next sign-in. MFA is unchanged."""
     require(staff, "accounts:manage")
-    user = _get(username)
+    user = _get_visible(staff, username)
+    _check_manage(staff, user)
     cognito().admin_reset_user_password(UserPoolId=STAFF_POOL_ID, Username=username)
     cognito().admin_user_global_sign_out(UserPoolId=STAFF_POOL_ID, Username=username)
     _audit(staff, "account.reset_password", user=user["email"])

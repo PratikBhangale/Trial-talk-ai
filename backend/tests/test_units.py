@@ -144,3 +144,27 @@ def test_ordered_template_params():
 def test_split_sql_keeps_dollar_blocks_and_quotes():
     sql = "CREATE TABLE a (x text DEFAULT 'a;b'); -- comment; here\nDO $$ BEGIN PERFORM 1; END $$;\nSELECT 2"
     assert split_sql(sql) == ["CREATE TABLE a (x text DEFAULT 'a;b')", "DO $$ BEGIN PERFORM 1; END $$", "SELECT 2"]
+
+
+# ------------------------------------------------------------------ keeping personal data out of logs and side stores
+
+def test_unhandled_errors_log_no_row_data(capsys):
+    from common.http import log_error
+    try:
+        raise RuntimeError('ERROR: new row for relation "participants" violates check constraint "participants_status_check"'
+                           "; Detail: Failing row contains (P-0142, Maria Lopez, +17325550142, 1968-04-12); SQLState: 23514")
+    except RuntimeError as e:
+        log_error(e)
+    out = capsys.readouterr().out
+    assert "sqlstate=23514 constraint=participants_status_check" in out
+    assert not any(s in out for s in ("Maria", "+17325550142", "1968"))
+
+
+def test_legacy_mirror_copies_no_name(monkeypatch):
+    from common import legacy_mirror
+    items = []
+    monkeypatch.setattr(legacy_mirror, "LEGACY_TABLE", "t")
+    monkeypatch.setattr(legacy_mirror, "_tbl", lambda: type("T", (), {"put_item": lambda self, Item: items.append(Item)})())
+    legacy_mirror.sync({"participant_id": "P-0142", "full_name": "Maria Lopez", "phone_e164": "+17325550142",
+                        "status": "enrolled", "study_id": "KOA-301", "created_at": "2026-09-02"}, [])
+    assert items and "Maria" not in str(items)

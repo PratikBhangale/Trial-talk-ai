@@ -260,8 +260,8 @@ GRANT INSERT (participant_id, record_type, source, parent_event_id, scheduled_at
   verbatim_text, details, created_by) ON trial.clinical_events TO participant_role;
 GRANT SELECT (reminder_id, participant_id, label, reminder_type, template_params, cron_expr, send_at, timezone,
   starts_on, ends_on, status, next_send_at) ON trial.reminders TO participant_role;
-GRANT SELECT (comm_id, participant_id, channel, direction, msg_type, subject, body_text, created_at, reply_to_comm_id)
-  ON trial.communications TO participant_role;
+GRANT SELECT (comm_id, participant_id, channel, direction, msg_type, subject, body_text, created_at, reply_to_comm_id,
+  parsed_action) ON trial.communications TO participant_role;
 GRANT INSERT (participant_id, channel, direction, msg_type, subject, body_text, session_id, latency_ms,
   input_tokens, output_tokens, model_id) ON trial.communications TO participant_role;
 

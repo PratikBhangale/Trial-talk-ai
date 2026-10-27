@@ -103,7 +103,7 @@ async function onSignIn(user) {
   ]);
   $('#pDoses').className = rem.dose_schedule.length ? '' : 'muted';
   $('#pDoses').innerHTML = rem.dose_schedule.length ? rem.dose_schedule.map(d => `
-    <div class="dose"><b>${esc(d.label)}</b> ${chip(d.status)}<div>${esc(d.dose?.instructions || '')}</div>
+    <div class="dose"><b>${esc(d.label)}</b> ${chip(d.status)}
     <div class="muted">${esc(d.schedule)} · next ${esc(d.next_send_at || '-')}</div></div>`).join('') : 'No dose reminders.';
   const other = rem.reminders.filter(r => r.reminder_type !== 'dose');
   $('#pOther').className = other.length ? '' : 'muted';
@@ -112,7 +112,7 @@ async function onSignIn(user) {
     + ['email', 'address_line1', 'city', 'state', 'postal_code', 'preferred_language', 'timezone'].map(k =>
       `<label>${esc(k)}<input name="${k}" value="${esc(p[k])}" data-orig="${esc(p[k])}"></label>`).join('')
     + `<div class="wide"><button class="primary">Save</button> <span class="muted">Name, birth date and phone change by request.</span></div>`;
-  $('#pHistory').innerHTML = table(hist.events, ['record_type', 'occurred_at', 'status', 'dose_label', 'response', 'visit_code', 'verbatim_text']);
+  $('#pHistory').innerHTML = table(hist.events, ['record_type', 'occurred_at', 'status', 'response', 'visit_code', 'verbatim_text']);
   $('#pRequests').innerHTML = reqs.requests.map(r => `<div style="padding:6px 0;border-top:1px solid var(--border)">
     <div class="muted">${esc(r.created_at)} · ${esc(r.subject)}</div><div>${esc(r.body_text)}</div>
     ${r.replies.length ? r.replies.map(x => `<div class="dose" style="margin:4px 0 0 12px"><b>Study team</b> <span class="muted">${esc(x.created_at)}</span><div>${esc(x.body_text)}</div></div>`).join('')

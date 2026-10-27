@@ -2,7 +2,7 @@
 
 Unit tests need nothing. Integration tests (test_api_*.py) need a local PostgreSQL 16:
 set TT_PG_BIN to the folder holding initdb/pg_ctl, and they start a throwaway server,
-apply lambdas/migrate/schema.sql, and run the real handlers through a fake RDS Data API
+build it from db/ (plus pending_db_additions.sql), and run the real handlers through a fake RDS Data API
 that executes on that server as the same database logins the Lambdas use (see local_env.py).
 """
 
@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-from local_env import FakeAgentCore, FakeCognito, FakeRdsData, FakeScheduler, FakeWhatsApp, LocalPostgres
+from local_env import FakeAgentCore, FakeCognito, FakeRdsData, FakeScheduler, FakeWhatsApp, LocalPostgres, wipe
 
 
 @pytest.fixture(scope="session")
@@ -37,7 +37,7 @@ def admin(pg):
 
 @pytest.fixture(autouse=False)
 def clean_db(admin):
-    admin.execute("TRUNCATE trial.clinical_events, trial.communications, trial.reminders, pii.participants CASCADE")
+    wipe(admin)
     yield
 
 
@@ -59,7 +59,8 @@ def aws(pg, clean_db, monkeypatch):
     monkeypatch.setattr(participant, "ses", lambda: types.SimpleNamespace(
         send_email=lambda **kw: fakes.emails.append(kw)))
     monkeypatch.setattr(participant, "ALERT_FROM", "alerts@example.org")
-    monkeypatch.setattr(participant, "ALERT_TO", ["coordinator@example.org"])
+    monkeypatch.setattr(participant, "ALERT_TO", {"RIVERSIDE": ["coordinator@riverside.example.org"],
+                                                  "LAKESIDE": ["coordinator@lakeside.example.org"]})
 
     def invoke_reminder(FunctionName, InvocationType, Payload):
         import io

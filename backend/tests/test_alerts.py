@@ -120,3 +120,29 @@ def test_chat_records_token_usage_and_staff_can_see_it(call_staff, call_particip
     assert out["by_participant"][0]["participant_id"] == pid and len(out["by_day"]) == 1
     assert call_staff("GET", "/staff/usage", claims=__import__("conftest").OTHER_SITE_CLAIMS)[1]["totals"]["calls"] == 0
     assert call_staff("GET", "/staff/usage", query={"days": "x"})[0] == 400
+
+
+def test_alert_email_goes_only_to_the_participants_own_site(call_staff, call_participant, aws):
+    from conftest import OTHER_SITE_CLAIMS
+    status, body = call_staff("POST", "/staff/participants", {"full_name": "Lee Chen", "phone_e164": "+13125550201",
+                                                              "study_id": "KOA-301", "site_id": "LAKESIDE"},
+                              claims=OTHER_SITE_CLAIMS)
+    assert status == 201, body
+    press(call_participant, body["participant"]["participant_id"])
+    assert [e["Destination"]["ToAddresses"] for e in aws.emails] == [["coordinator@lakeside.example.org"]]
+
+
+def test_no_email_when_the_site_has_no_recipients(call_staff, call_participant, aws, monkeypatch):
+    import participant_api.handler as participant
+    monkeypatch.setattr(participant, "ALERT_TO", {"LAKESIDE": ["coordinator@lakeside.example.org"]})
+    pid = enroll(call_staff)  # RIVERSIDE
+    status, out = press(call_participant, pid)
+    assert status == 200 and out["new"] is True  # the alert still reaches the staff widget
+    assert aws.emails == []
+
+
+def test_recipients_config():
+    from participant_api.handler import _recipients_by_site
+    assert _recipients_by_site('{"RIVERSIDE": "a@x.org, b@x.org", "*": ["c@y.org"]}') == {
+        "RIVERSIDE": ["a@x.org", "b@x.org"], "*": ["c@y.org"]}
+    assert _recipients_by_site("a@x.org,b@x.org") == {} and _recipients_by_site("") == {}

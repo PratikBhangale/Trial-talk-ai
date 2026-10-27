@@ -1,8 +1,8 @@
 """Bridge to the prototype's DynamoDB table while the agent and WhatsApp Lambda still read it.
 
 Aurora is the source of truth. After a staff change we copy the few fields the deployed agent
-(store.get_profile) and WhatsApp Lambda (find_participant) need. Remove this module once both
-read Aurora. Disabled when LEGACY_TABLE is empty.
+(store.get_profile) and WhatsApp Lambda (find_participant) need, and no name. The phone lookup is still
+here, outside Aurora's access rules, so remove this module once both read Aurora. Disabled when LEGACY_TABLE is empty.
 """
 
 import os
@@ -49,7 +49,9 @@ def sync(participant: dict, reminders: list[dict], old_phone: str | None = None)
                   for t in [_dose_time(r["cron_expr"])] if t]
     _tbl().put_item(Item={
         "PK": f"P#{pid}", "SK": "PROFILE",
-        "name": participant["full_name"],
+        # Not the real name: db/ never lets the agent see names, and this table has no access rules.
+        # The agent's escalation email reads this key, so it must stay; the coordinator looks the id up in the portal.
+        "name": pid,
         "trial_id": participant["study_id"],
         "enrolled_on": str(participant["created_at"])[:10],
         "dose_times": dose_times or ["(no dose schedule set)"],
