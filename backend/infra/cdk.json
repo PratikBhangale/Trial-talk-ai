@@ -11,8 +11,9 @@
     "alertFrom": "",
     "alertTo": "",
     "staffCallbackUrls": "http://localhost:5173/",
-    "adminCallbackUrls": "http://localhost:5175/",
-    "corsOrigins": "http://localhost:5173,http://localhost:5174,http://localhost:5175",
+    "corsOrigins": "http://localhost:5173,http://localhost:5174",
+    "otlpEndpoint": "",
+    "otelLayerArn": "",
     "cognitoDomainPrefix": "trialtalk-staff-dev",
     "@aws-cdk/core:defaultCrossStackReferences": "strong"
   }

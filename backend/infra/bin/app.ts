@@ -30,9 +30,10 @@ new PortalStack(app, 'TrialTalk-Portal', {
   alertFrom: ctx('alertFrom'),
   alertTo: ctx('alertTo'),
   staffCallbackUrls: list('staffCallbackUrls'),
-  adminCallbackUrls: list('adminCallbackUrls'),
   corsOrigins: list('corsOrigins'),
   cognitoDomainPrefix: ctx('cognitoDomainPrefix'),
+  otlpEndpoint: ctx('otlpEndpoint') || undefined,
+  otelLayerArn: ctx('otelLayerArn') || undefined,
 });
 
 Tags.of(app).add('project', 'trialtalk');

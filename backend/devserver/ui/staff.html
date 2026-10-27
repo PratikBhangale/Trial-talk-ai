@@ -9,7 +9,37 @@
 <body>
 <header></header>
 <main>
-  <div class="panel signed-out" data-signed-out>Sign in as a coordinator or PI to manage participants at your sites.</div>
+  <div class="panel signed-out" data-signed-out>Sign in as a coordinator or PI to manage participants, triage emergency alerts and manage your team.</div>
+
+  <div class="hidden" data-signed-in>
+    <div class="panel alert-panel" id="alertsPanel">
+      <h2>Emergency alerts <span id="alertBadge"></span><span class="spacer"></span>
+        <span class="tabs" id="alertTabs" style="margin:0"><button data-scope="active" class="on">Active</button><button data-scope="resolved">Resolved</button></span></h2>
+      <div id="alertList" class="muted">Loading...</div>
+    </div>
+    <div class="grid2">
+      <div class="panel" id="usagePanel">
+        <h2>Token usage <span class="spacer"></span>
+          <select id="usageDays" aria-label="Period"><option value="1">Today</option><option value="7">7 days</option><option value="30" selected>30 days</option></select></h2>
+        <div id="usageBody" class="muted">Loading...</div>
+      </div>
+      <div class="panel" id="teamPanel">
+        <h2>Team (staff accounts) <span class="spacer"></span><button class="small primary" id="inviteBtn">+ Invite</button></h2>
+        <div id="teamFormWrap" class="hidden" style="margin-bottom:12px">
+          <form class="form" id="teamForm">
+            <label>Email *<input name="email" type="email" required value="newcoordinator@riverside.example.org"></label>
+            <label>Name<input name="name" value="Avery Kim"></label>
+            <label>Role<select name="role"><option>coordinator</option><option>PI</option></select></label>
+            <label>Sites (comma separated)<input name="site_ids" value="RIVERSIDE"></label>
+            <label>Studies (empty = any)<input name="study_ids" value="KOA-301"></label>
+            <div class="wide row"><button class="primary" id="teamSave">Send invite</button><button type="button" id="teamCancel">Cancel</button>
+              <span class="muted">Staff are their own admins. Cognito emails a temporary password; MFA setup is required at first sign-in.</span></div>
+          </form>
+        </div>
+        <div class="table-wrap scroll" id="teamBody" class="muted">Loading...</div>
+      </div>
+    </div>
+  </div>
 
   <div class="grid hidden" data-signed-in>
     <div>
@@ -27,7 +57,7 @@
         <div class="list" id="partList"></div>
       </div>
       <div class="panel">
-        <h2>Requests from participants <span class="spacer"></span><button class="small" id="reqRefresh">Refresh</button></h2>
+        <h2>Requests from participants <span id="reqBadge"></span><span class="spacer"></span><button class="small" id="reqRefresh">Refresh</button></h2>
         <div id="staffRequests" class="muted">None</div>
       </div>
     </div>
@@ -97,22 +127,32 @@
       </div>
     </div>
   </div>
+
+  <div class="hidden" data-signed-in>
+    <div class="panel" id="otelPanel">
+        <h2>Observability (OpenTelemetry) <span class="spacer"></span>
+          <label class="inline" title="The widgets poll the API every few seconds; hide that noise"><input type="checkbox" id="otelSelf"> include widget polling</label>
+          <button class="small" id="otelRefresh">Refresh</button></h2>
+        <div id="otelBody" class="muted">Loading...</div>
+      </div>
+  </div>
 </main>
 
 <script src="/ui/common.js"></script>
+<script src="/ui/widgets.js"></script>
 <script>
 const state = { pid: null, tab: 'events', reminders: [], me: null };
 
 async function onSignIn(user) {
   showDetail(null);
   $('#enrollPanel').classList.add('hidden');
-  if (!user) return;
+  if (!user) return stopWidgets();
   try {
     state.me = await api('GET', '/staff/me');
   } catch { state.me = null; return; }
   $('#whoami').textContent = `${state.me.role} · sites ${state.me.site_ids.join(', ')} · studies ${state.me.study_ids.join(', ') || 'any'}`;
   $('#enrollSite').innerHTML = state.me.site_ids.map(s => `<option>${esc(s)}</option>`).join('');
-  loadParticipants(); loadStaffRequests();
+  loadParticipants(); loadStaffRequests(); startWidgets();
 }
 
 async function loadParticipants() {
@@ -127,14 +167,49 @@ async function loadParticipants() {
     </button>`).join('') : '<span class="muted">No participants visible at your sites.</span>';
 }
 
+// One-click replies. Staff are responsible for what they send, so the wording promises only what a click can back up.
+const RECEIVED = ['Received', "Thanks, we've received your request and will get back to you shortly."];
+const QUICK = {
+  reminder_change: [['Updated', 'Your reminder time has been updated as requested.'],
+    ['Call us', 'Please call the study site so we can find a reminder time that works for you.']],
+  reminder_pause: [['Paused', 'Your reminders have been paused. Let us know when you want them back.']],
+  profile_change: [['Updated', 'Your details have been updated.'],
+    ['We will call', 'To change your name, birth date or phone we need to confirm it with you. A coordinator will call you.']],
+  withdrawal: [['We will call', 'We are sorry to hear this. A member of the team will call you to talk it through before anything changes.']],
+  whatsapp_opt_out: [['Noted', 'We have noted your request to stop WhatsApp messages.']],
+  contact_team: [['We will call', 'Thanks for getting in touch. A member of the team will contact you shortly.']],
+  history_correction: [['Will review', 'We will review your correction with you at your next visit.']],
+};
+const kindOf = r => (/\]\s*(\w+)\s*$/.exec(r.subject || '') || [])[1] || '';
+state.requests = []; state.openReq = null;
+
 async function loadStaffRequests() {
-  const { requests } = await api('GET', '/staff/requests');
+  const { requests, unanswered } = await api('GET', '/staff/requests');
+  state.requests = requests;
+  $('#reqBadge').innerHTML = unanswered ? `<span class="chip warn">${unanswered} waiting</span>` : '';
   $('#staffRequests').className = requests.length ? '' : 'muted';
-  $('#staffRequests').innerHTML = requests.length ? requests.map(r => `
-    <div style="padding:6px 0;border-bottom:1px solid var(--border)">
-      <a href="#" data-pid="${esc(r.participant_id)}"><b>${esc(r.participant_id)}</b></a> ${esc(r.full_name)}
-      <div class="muted">${esc(r.subject)} · ${esc(r.created_at)}</div><div>${esc(r.body_text)}</div>
-    </div>`).join('') : 'None';
+  $('#staffRequests').innerHTML = requests.length ? requests.map(requestCard).join('') : 'None';
+}
+
+function requestCard(r) {
+  const id = esc(r.comm_id), open = state.openReq === r.comm_id, kind = kindOf(r);
+  return `<div class="req ${r.answered ? 'answered' : ''} ${open ? 'open' : ''}" data-req="${id}">
+    <div class="top"><a href="#" data-pid="${esc(r.participant_id)}"><b>${esc(r.participant_id)}</b></a> ${esc(r.full_name)}
+      <span class="spacer"></span>${r.answered ? '<span class="chip ok">answered</span>' : '<span class="chip warn">new</span>'}</div>
+    <div class="muted">${esc(kind.replace(/_/g, ' '))} · ${esc(r.created_at)}</div>
+    <div>${esc(r.body_text)}</div>
+    ${r.replies.map(x => `<div class="reply"><span class="muted">${esc(x.from_addr)} · ${esc(x.created_at)}</span><br>${esc(x.body_text)}</div>`).join('')}
+    <div class="row quick">${[RECEIVED, ...(QUICK[kind] || [])].map(([label, text]) =>
+      `<button class="small" data-quick="${id}" data-text="${esc(text)}" title="${esc(text)}">${esc(label)}</button>`).join('')}
+      <button class="small primary" data-write="${id}">${open ? 'Close' : 'Write reply...'}</button></div>
+    ${open ? `<div class="compose"><textarea rows="5" maxlength="4000" placeholder="Write a longer reply. The participant sees it under their request on the website."></textarea>
+      <div class="row"><button class="primary small" data-send="${id}">Send reply</button><span class="muted">Quick replies send immediately.</span></div></div>` : ''}
+  </div>`;
+}
+
+async function sendReply(id, text) {
+  await api('POST', `/staff/requests/${id}/reply`, { text });
+  toast('Reply sent'); state.openReq = null; loadStaffRequests();
 }
 
 const PROFILE_FIELDS = [
@@ -224,6 +299,13 @@ document.addEventListener('click', e => {
   const pidEl = e.target.closest('[data-pid]');
   if (pidEl) { e.preventDefault(); showDetail(pidEl.dataset.pid); }
   const close = e.target.closest('[data-close]'); if (close) $('#' + close.dataset.close).classList.add('hidden');
+  const q = e.target.closest('[data-quick]'); if (q) sendReply(q.dataset.quick, q.dataset.text).catch(() => {});
+  const w = e.target.closest('[data-write]');
+  if (w) { state.openReq = state.openReq === w.dataset.write ? null : w.dataset.write; loadStaffRequests(); }
+  const snd = e.target.closest('[data-send]');
+  if (snd) { const t = snd.closest('.req').querySelector('textarea').value.trim(); if (!t) return toast('Write a reply first', true); sendReply(snd.dataset.send, t).catch(() => {}); }
+  const card = e.target.closest('.req');  // clicking the request itself opens the reply box too
+  if (card && !e.target.closest('button, a, textarea') && state.openReq !== card.dataset.req) { state.openReq = card.dataset.req; loadStaffRequests(); }
   const rem = e.target.closest('[data-rem]'); if (rem) reminderAction(rem.dataset.rem, rem.dataset.id).catch(() => {});
 });
 $('#dTabs').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) { state.tab = b.dataset.tab; loadTab(); } };
@@ -281,6 +363,7 @@ remForm.onsubmit = async e => {
   remForm.classList.add('hidden'); showDetail(state.pid);
 };
 
+wireWidgets();
 initPortal('staff', 'coordinators and PIs', onSignIn);
 </script>
 </body>

@@ -13,6 +13,7 @@ export interface PyFunctionProps {
   environment?: Record<string, string>;
   timeout?: Duration;
   memorySize?: number;
+  layers?: lambda.ILayerVersion[];
 }
 
 /** Python 3.12 Lambda from backend/lambdas, X-Ray on, KMS-encrypted env and logs. */
@@ -26,6 +27,7 @@ export class PyFunction extends lambda.Function {
       code: lambda.Code.fromAsset(LAMBDA_DIR, { exclude: ['**/__pycache__', 'migrate/**'] }),
       timeout: props.timeout ?? Duration.seconds(15),
       memorySize: props.memorySize ?? 256,
+      layers: props.layers,
       tracing: lambda.Tracing.ACTIVE,
       environmentEncryption: data.key,
       environment: {

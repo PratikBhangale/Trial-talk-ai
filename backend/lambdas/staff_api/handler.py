@@ -12,9 +12,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import boto3
 
-from common import db, legacy_mirror, scheduling
+from common import db, legacy_mirror, scheduling, telemetry
 from common.auth import Staff, require, staff_claims
 from common.http import HttpError, Router, json_body, query_params
+from staff_api import accounts
 
 PARTICIPANT_POOL_ID = os.environ.get("PARTICIPANT_POOL_ID", "")
 REMINDER_FUNCTION_ARN = os.environ.get("REMINDER_FUNCTION_ARN", "")
@@ -25,6 +26,7 @@ DEFAULT_TEMPLATES = json.loads(os.environ.get("DEFAULT_TEMPLATES", "{}")) or {
 DEFAULT_BUTTONS = {"dose": ["Taken", "Skipped", "Remind me in 30 min"], "visit": ["Confirm", "Reschedule"]}
 
 router = Router()
+router.include(accounts.router)
 _cognito = None
 _lambda = None
 
@@ -340,7 +342,7 @@ def participant_communications(event, staff: Staff, pid: str):
 
 @router.route("GET", "/staff/requests")
 def participant_requests(event, staff: Staff):
-    """Queue of participant website requests (profile changes, reminder changes, withdrawal)."""
+    """Queue of participant website requests, unanswered first, each with the replies sent so far."""
     require(staff, "requests:read")
     with db.tx(site_ids=staff.site_ids) as t:
         rows = t.query(
@@ -348,7 +350,144 @@ def participant_requests(event, staff: Staff):
             "FROM trial.communications c JOIN pii.participants p USING (participant_id) "
             "WHERE c.msg_type = 'participant_request' AND c.created_at > now() - interval '30 days' "
             "ORDER BY c.created_at DESC LIMIT 100")
-    return 200, {"requests": rows}
+        replies = t.query(
+            "SELECT r.comm_id, r.reply_to_comm_id, r.body_text, r.from_addr, r.created_at "
+            "FROM trial.communications r WHERE r.msg_type = 'staff_reply' "
+            "  AND r.reply_to_comm_id = ANY (SELECT comm_id FROM trial.communications "
+            "    WHERE msg_type = 'participant_request' AND created_at > now() - interval '30 days') "
+            "ORDER BY r.created_at")
+    for r in rows:
+        r["replies"] = [x for x in replies if x["reply_to_comm_id"] == r["comm_id"]]
+        r["answered"] = bool(r["replies"])
+    rows.sort(key=lambda r: r["answered"])  # stable: unanswered first, newest first within each group
+    return 200, {"requests": rows, "unanswered": sum(not r["answered"] for r in rows)}
+
+
+@router.route("POST", "/staff/requests/{cid}/reply")
+def reply_to_request(event, staff: Staff, cid: str):
+    """Answer a participant request (a one-click quick reply or a longer message). The participant sees it
+    under their request on the website. More than one reply is allowed."""
+    require(staff, "requests:write")
+    _uuid(cid)
+    text = (json_body(event).get("text") or "").strip()
+    if not text:
+        raise HttpError(400, "text is required")
+    if len(text) > 4000:
+        raise HttpError(400, "Replies are limited to 4000 characters")
+    with db.tx(site_ids=staff.site_ids) as t:
+        req = t.one("SELECT comm_id, participant_id, subject FROM trial.communications "
+                    "WHERE comm_id = :id::uuid AND msg_type = 'participant_request'", id=cid)
+        if not req:
+            raise HttpError(404, "Request not found")
+        reply = t.one(
+            "INSERT INTO trial.communications (participant_id, channel, direction, msg_type, subject, body_text,"
+            "  from_addr, reply_to_comm_id) VALUES (:pid, 'web', 'outbound', 'staff_reply', :subject, :body,"
+            "  :by, :rid::uuid) RETURNING comm_id, body_text, from_addr, created_at",
+            pid=req["participant_id"], subject="Re: " + (req["subject"] or ""), body=text, by=staff.email, rid=cid)
+        _audit(staff, "request.reply", request_id=cid, participant_id=req["participant_id"])
+    return 201, {"reply": reply}
+
+
+# ------------------------------------------------------------------ emergency alerts
+
+ALERT_COLS = """a.alert_id, a.participant_id, p.full_name, p.phone_e164, p.site_id, a.severity, a.source, a.message,
+  a.keywords, a.status, a.press_count, a.last_pressed_at, a.created_at, a.acknowledged_by, a.acknowledged_at,
+  a.resolved_by, a.resolved_at, a.resolution_note"""
+ALERT_FILTERS = {"active": "a.status <> 'resolved'", "resolved": "a.status = 'resolved'", "all": "true"}
+
+
+@router.route("GET", "/staff/alerts")
+def list_alerts(event, staff: Staff):
+    """Emergency alerts at your sites. Default is everything unresolved, open and life-threatening first."""
+    require(staff, "alerts:read")
+    scope = query_params(event).get("status") or "active"
+    if scope not in ALERT_FILTERS:
+        raise HttpError(400, f"status must be one of {sorted(ALERT_FILTERS)}")
+    with db.tx(site_ids=staff.site_ids) as t:
+        rows = t.query(
+            f"SELECT {ALERT_COLS} FROM trial.emergency_alerts a JOIN pii.participants p USING (participant_id) "
+            f"WHERE {ALERT_FILTERS[scope]} AND (a.status <> 'resolved' OR a.created_at > now() - interval '30 days') "
+            "ORDER BY (a.status = 'resolved'), (a.status = 'acknowledged'), "
+            "  CASE a.severity WHEN 'life_threatening' THEN 0 WHEN 'urgent' THEN 1 ELSE 2 END, a.created_at DESC "
+            "LIMIT 100")
+    return 200, {"alerts": rows, "open": sum(r["status"] == "open" for r in rows)}
+
+
+def _alert(t: db.Tx, aid: str) -> dict:
+    _uuid(aid)
+    row = t.one(f"SELECT {ALERT_COLS} FROM trial.emergency_alerts a JOIN pii.participants p USING (participant_id) "
+                "WHERE a.alert_id = :id::uuid", id=aid)
+    if not row:
+        raise HttpError(404, "Alert not found")
+    return row
+
+
+@router.route("POST", "/staff/alerts/{aid}/acknowledge")
+def acknowledge_alert(event, staff: Staff, aid: str):
+    """'I have seen this and am on it.' Idempotent; the first acknowledger is the one recorded."""
+    require(staff, "alerts:write")
+    with db.tx(site_ids=staff.site_ids) as t:
+        alert = _alert(t, aid)
+        if alert["status"] == "open":
+            t.execute("UPDATE trial.emergency_alerts SET status = 'acknowledged', acknowledged_by = :by,"
+                      "  acknowledged_at = now() WHERE alert_id = :id::uuid AND status = 'open'",
+                      by=staff.actor, id=aid)
+            _audit(staff, "alert.acknowledge", alert_id=aid, participant_id=alert["participant_id"])
+        return 200, {"alert": _alert(t, aid)}
+
+
+@router.route("POST", "/staff/alerts/{aid}/resolve")
+def resolve_alert(event, staff: Staff, aid: str):
+    """Close the loop: what happened and what was done. The note is required and kept."""
+    require(staff, "alerts:write")
+    note = (json_body(event).get("note") or "").strip()
+    if not note:
+        raise HttpError(400, "note is required: say what happened and what was done")
+    with db.tx(site_ids=staff.site_ids) as t:
+        alert = _alert(t, aid)
+        if alert["status"] == "resolved":
+            raise HttpError(409, "Alert is already resolved")
+        t.execute("UPDATE trial.emergency_alerts SET status = 'resolved', resolved_by = :by, resolved_at = now(),"
+                  "  resolution_note = :note, acknowledged_by = coalesce(acknowledged_by, :by),"
+                  "  acknowledged_at = coalesce(acknowledged_at, now()) WHERE alert_id = :id::uuid",
+                  by=staff.actor, note=note[:2000], id=aid)
+        _audit(staff, "alert.resolve", alert_id=aid, participant_id=alert["participant_id"])
+        return 200, {"alert": _alert(t, aid)}
+
+
+# ------------------------------------------------------------------ token usage
+
+@router.route("GET", "/staff/usage")
+def token_usage(event, staff: Staff):
+    """Agent token usage at your sites over the last `days` (default 30): totals, per day and per participant."""
+    require(staff, "ops:read")
+    try:
+        days = min(max(int(query_params(event).get("days") or 30), 1), 90)
+    except ValueError:
+        raise HttpError(400, "days must be a number")
+    window = "c.created_at > now() - make_interval(days => :days::int) AND c.input_tokens IS NOT NULL"
+    with db.tx(site_ids=staff.site_ids) as t:
+        totals = t.one(f"SELECT coalesce(sum(c.input_tokens), 0) AS input_tokens, "
+                       f"coalesce(sum(c.output_tokens), 0) AS output_tokens, count(*) AS calls "
+                       f"FROM trial.communications c WHERE {window}", days=days)
+        by_day = t.query(f"SELECT c.created_at::date AS day, sum(c.input_tokens) AS input_tokens, "
+                         f"sum(c.output_tokens) AS output_tokens, count(*) AS calls "
+                         f"FROM trial.communications c WHERE {window} GROUP BY 1 ORDER BY 1", days=days)
+        by_participant = t.query(
+            f"SELECT c.participant_id, p.full_name, p.site_id, sum(c.input_tokens) AS input_tokens, "
+            f"sum(c.output_tokens) AS output_tokens, count(*) AS calls "
+            f"FROM trial.communications c JOIN pii.participants p USING (participant_id) WHERE {window} "
+            "GROUP BY 1, 2, 3 ORDER BY sum(c.input_tokens) + sum(c.output_tokens) DESC LIMIT 20", days=days)
+    return 200, {"days": days, "totals": totals, "by_day": by_day, "by_participant": by_participant}
+
+
+# ------------------------------------------------------------------ observability
+
+@router.route("GET", "/staff/observability")
+def observability(event, staff: Staff):
+    """OpenTelemetry window for the staff portal widget: recent spans and request metrics. No PHI in telemetry."""
+    require(staff, "ops:read")
+    return 200, telemetry.snapshot()
 
 
 # ------------------------------------------------------------------ reminders and dosing

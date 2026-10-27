@@ -5,6 +5,8 @@ import os
 
 import boto3
 
+from common import telemetry
+
 ORIGINATION_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 META_API_VERSION = "v20.0"
 
@@ -42,9 +44,10 @@ def send_template(to_e164: str, name: str, language: str, body_params: list[str]
         "type": "template",
         "template": {"name": name, "language": {"code": language}, "components": components},
     }
-    resp = client().send_whatsapp_message(
-        originationPhoneNumberId=ORIGINATION_ID,
-        message=json.dumps(message).encode(),
-        metaApiVersion=META_API_VERSION,
-    )
+    with telemetry.span("whatsapp.send_template", **{"messaging.system": "whatsapp", "messaging.template": name}):
+        resp = client().send_whatsapp_message(
+            originationPhoneNumberId=ORIGINATION_ID,
+            message=json.dumps(message).encode(),
+            metaApiVersion=META_API_VERSION,
+        )
     return resp["messageId"]

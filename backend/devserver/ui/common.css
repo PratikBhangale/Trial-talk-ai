@@ -77,3 +77,44 @@ header .portal-name { font-weight: 600; font-size: 16px; }
 .cards a.panel { text-decoration: none; color: inherit; display: block; }
 .cards a.panel:hover { border-color: var(--accent); }
 .cards a.panel h2 { color: var(--accent); }
+
+/* ---- emergency alerts */
+.alert-panel.live { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 35%, transparent); }
+.alert-card { border: 1px solid var(--border); border-left: 5px solid var(--muted); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; display: grid; gap: 4px; }
+.alert-card.sev-life_threatening { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+.alert-card.sev-urgent { border-left-color: var(--warn); }
+.alert-card.done { opacity: .65; }
+.alert-card .top { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sev { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 8px; border-radius: 999px; background: var(--chip); }
+.sev.life_threatening { background: var(--danger); color: #fff; }
+.sev.urgent { background: var(--warn); color: #fff; }
+.pulse { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+.sos-btn { width: 100%; padding: 22px 12px; font-size: 22px; font-weight: 700; letter-spacing: .02em; border-radius: 12px; border: 3px solid #7f1d1d; background: #dc2626; color: #fff; cursor: pointer; }
+.sos-btn:hover { background: #b91c1c; border-color: #7f1d1d; }
+.sos-btn:focus-visible { outline: 4px solid #fbbf24; outline-offset: 3px; }
+.sos-status { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: var(--chip); }
+
+/* ---- observability */
+.kpis { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-bottom: 12px; }
+.kpi { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.kpi b { display: block; font-size: 20px; }
+.kpi span { color: var(--muted); font-size: 12px; }
+.trace { border-top: 1px solid var(--border); padding: 4px 0; }
+.trace summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.wf { display: grid; grid-template-columns: 200px minmax(0, 1fr) 70px; gap: 6px; align-items: center; font-size: 12px; padding: 2px 0; }
+.wf .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf .track { position: relative; height: 10px; background: var(--chip); border-radius: 3px; }
+.wf .track i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; min-width: 2px; }
+.wf .track i.err { background: var(--danger); }
+.wf .dur { text-align: right; color: var(--muted); }
+.scroll { max-height: 340px; overflow-y: auto; }
+
+/* ---- participant requests (staff) */
+.req { border: 1px solid var(--border); border-left: 4px solid var(--warn); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; display: grid; gap: 3px; cursor: pointer; }
+.req.answered { border-left-color: var(--ok); }
+.req .top { display: flex; gap: 6px; align-items: center; }
+.req .reply { background: var(--chip); border-radius: 6px; padding: 6px 8px; font-size: 13px; cursor: default; }
+.req .quick { margin-top: 4px; }
+.req .compose { display: grid; gap: 6px; cursor: default; }

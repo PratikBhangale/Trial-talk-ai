@@ -1,8 +1,8 @@
-"""Admin API: staff account management. Routes under /admin, behind the admin app client's JWT authorizer.
+"""Staff account management, inside the staff API: /staff/accounts. Cognito on the staff pool only.
 
-Admins are staff-pool users in the 'admin' group. This Lambda only calls Cognito on the staff pool:
-it has no database login, so admins can grant access but never read participant data themselves.
-Every change is printed as a structured audit line for CloudWatch.
+Staff are their own admins: any coordinator or PI can invite colleagues, change roles and sites, and disable
+accounts. There is no separate admin group or portal. These routes never touch participant data; they only call
+Cognito. Every change prints a structured audit line for CloudWatch.
 """
 
 import json
@@ -12,12 +12,11 @@ from datetime import datetime, timezone
 
 import boto3
 
-from common.auth import Admin, admin_claims
+from common.auth import Staff, require
 from common.http import HttpError, Router, json_body, query_params
 
 STAFF_POOL_ID = os.environ.get("STAFF_POOL_ID", "")
 ROLES = ("coordinator", "PI")
-GROUPS = (*ROLES, "admin")
 SITE_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{1,31}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -32,12 +31,8 @@ def cognito():
     return _cognito
 
 
-def handler(event, context):
-    return router.dispatch(event, admin_claims)
-
-
-def _audit(admin: Admin, action: str, **fields) -> None:
-    print(json.dumps({"audit": action, "by": admin.actor, "at": datetime.now(timezone.utc).isoformat(), **fields},
+def _audit(staff: Staff, action: str, **fields) -> None:
+    print(json.dumps({"audit": action, "by": staff.actor, "at": datetime.now(timezone.utc).isoformat(), **fields},
                      default=str))
 
 
@@ -60,13 +55,11 @@ def _groups(username: str) -> list[str]:
 
 def _user(raw: dict, groups: list[str]) -> dict:
     attrs = {a["Name"]: a["Value"] for a in raw.get("Attributes") or raw.get("UserAttributes") or []}
-    role = next((g for g in ("PI", "coordinator") if g in groups), None)
     return {
         "username": raw["Username"],
         "email": attrs.get("email"),
         "name": attrs.get("name"),
-        "role": role,
-        "admin": "admin" in groups,
+        "role": next((g for g in ("PI", "coordinator") if g in groups), None),
         "site_ids": [s for s in attrs.get("custom:site_ids", "").split(",") if s],
         "study_ids": [s for s in attrs.get("custom:study_ids", "").split(",") if s],
         "enabled": raw.get("Enabled", True),
@@ -84,33 +77,30 @@ def _get(username: str) -> dict:
     return _user(raw, _groups(raw["Username"]))
 
 
-def _set_groups(username: str, current: list[str], wanted: set[str]) -> None:
-    for g in sorted(wanted - set(current)):
-        cognito().admin_add_user_to_group(UserPoolId=STAFF_POOL_ID, Username=username, GroupName=g)
-    for g in sorted(set(current) & set(GROUPS) - wanted):
-        cognito().admin_remove_user_from_group(UserPoolId=STAFF_POOL_ID, Username=username, GroupName=g)
+def _set_role(username: str, current: str | None, wanted: str) -> None:
+    if current == wanted:
+        return
+    if current:
+        cognito().admin_remove_user_from_group(UserPoolId=STAFF_POOL_ID, Username=username, GroupName=current)
+    cognito().admin_add_user_to_group(UserPoolId=STAFF_POOL_ID, Username=username, GroupName=wanted)
 
 
-def _wanted_groups(role, is_admin: bool) -> set[str]:
-    if role not in (*ROLES, None, ""):
-        raise HttpError(400, f"role must be one of {list(ROLES)} or empty")
-    return ({role} if role else set()) | ({"admin"} if is_admin else set())
+def _role(value) -> str:
+    if value not in ROLES:
+        raise HttpError(400, f"role must be one of {list(ROLES)}")
+    return value
 
 
-def _not_self(admin: Admin, user: dict, what: str) -> None:
-    if user["username"] == admin.username or (user["email"] and user["email"] == admin.email):
-        raise HttpError(409, f"You cannot {what} your own account; ask another admin")
+def _not_self(staff: Staff, user: dict, what: str) -> None:
+    if user["email"] and user["email"] == staff.email:
+        raise HttpError(409, f"You cannot {what} your own account; ask a colleague")
 
 
 # ------------------------------------------------------------------ routes
 
-@router.route("GET", "/admin/me")
-def whoami(event, admin: Admin):
-    return 200, {"email": admin.email, "username": admin.username}
-
-
-@router.route("GET", "/admin/staff")
-def list_staff(event, admin: Admin):
+@router.route("GET", "/staff/accounts")
+def list_accounts(event, staff: Staff):
+    require(staff, "accounts:manage")
     q = (query_params(event).get("q") or "").lower()
     users, token = [], None
     while True:
@@ -126,21 +116,20 @@ def list_staff(event, admin: Admin):
     if q:
         out = [u for u in out if q in (u["email"] or "").lower() or q in (u["name"] or "").lower()
                or any(q in s.lower() for s in u["site_ids"])]
-    return 200, {"staff": sorted(out, key=lambda u: (u["email"] or ""))}
+    return 200, {"accounts": sorted(out, key=lambda u: (u["email"] or ""))}
 
 
-@router.route("POST", "/admin/staff")
-def create_staff(event, admin: Admin):
-    """Invite a staff user. Cognito emails a temporary password; MFA setup is forced at first sign-in."""
+@router.route("POST", "/staff/accounts")
+def create_account(event, staff: Staff):
+    """Invite a colleague. Cognito emails a temporary password; MFA setup is forced at first sign-in."""
+    require(staff, "accounts:manage")
     body = json_body(event)
     email = (body.get("email") or "").strip().lower()
     if not EMAIL_RE.match(email):
         raise HttpError(400, "A valid email is required")
-    groups = _wanted_groups(body.get("role"), bool(body.get("admin")))
-    if not groups:
-        raise HttpError(400, "Give a role (coordinator or PI), admin access, or both")
+    role = _role(body.get("role"))
     sites, studies = _ids(body.get("site_ids"), "site_ids"), _ids(body.get("study_ids"), "study_ids")
-    if body.get("role") and not sites:
+    if not sites:
         raise HttpError(400, "Coordinators and PIs need at least one site")
 
     attrs = [{"Name": "email", "Value": email}, {"Name": "email_verified", "Value": "true"},
@@ -153,21 +142,23 @@ def create_staff(event, admin: Admin):
                                           DesiredDeliveryMediums=["EMAIL"])["User"]
     except cognito().exceptions.UsernameExistsException:
         raise HttpError(409, "A staff user with that email already exists")
-    _set_groups(raw["Username"], [], groups)
-    _audit(admin, "staff.create", user=email, groups=sorted(groups), site_ids=sites, study_ids=studies)
+    _set_role(raw["Username"], None, role)
+    _audit(staff, "account.create", user=email, role=role, site_ids=sites, study_ids=studies)
     return 201, {"user": _get(raw["Username"])}
 
 
-@router.route("GET", "/admin/staff/{username}")
-def read_staff(event, admin: Admin, username: str):
+@router.route("GET", "/staff/accounts/{username}")
+def read_account(event, staff: Staff, username: str):
+    require(staff, "accounts:manage")
     return 200, {"user": _get(username)}
 
 
-@router.route("PATCH", "/admin/staff/{username}")
-def update_staff(event, admin: Admin, username: str):
-    """Change role, admin access, sites, studies or name. Takes effect at the user's next token refresh."""
+@router.route("PATCH", "/staff/accounts/{username}")
+def update_account(event, staff: Staff, username: str):
+    """Change role, sites, studies or name. Takes effect at the user's next token refresh."""
+    require(staff, "accounts:manage")
     body = json_body(event)
-    unknown = set(body) - {"role", "admin", "site_ids", "study_ids", "name"}
+    unknown = set(body) - {"role", "site_ids", "study_ids", "name"}
     if unknown:
         raise HttpError(400, f"Cannot update: {sorted(unknown)}")
     if not body:
@@ -181,48 +172,47 @@ def update_staff(event, admin: Admin, username: str):
         attrs.append({"Name": "custom:study_ids", "Value": ",".join(_ids(body["study_ids"], "study_ids"))})
     if "name" in body:
         attrs.append({"Name": "name", "Value": str(body["name"] or "")[:128]})
-
-    groups_now = [g for g in (["admin"] if user["admin"] else []) + ([user["role"]] if user["role"] else [])]
-    wanted = _wanted_groups(body.get("role", user["role"]), bool(body.get("admin", user["admin"])))
-    if user["admin"] and "admin" not in wanted:
-        _not_self(admin, user, "remove admin access from")
-    if not wanted:
-        raise HttpError(400, "A user needs a role or admin access; disable the account instead")
+    role = _role(body["role"]) if "role" in body else user["role"]
+    if not role:
+        raise HttpError(400, "A user needs a role; disable the account instead")
     sites_after = next((a["Value"] for a in attrs if a["Name"] == "custom:site_ids"), ",".join(user["site_ids"]))
-    if wanted & set(ROLES) and not sites_after:
+    if not sites_after:
         raise HttpError(400, "Coordinators and PIs need at least one site")
 
     if attrs:
         cognito().admin_update_user_attributes(UserPoolId=STAFF_POOL_ID, Username=username, UserAttributes=attrs)
-    _set_groups(username, groups_now, wanted)
-    _audit(admin, "staff.update", user=user["email"], changes=body)
+    _set_role(username, user["role"], role)
+    _audit(staff, "account.update", user=user["email"], changes=body)
     return 200, {"user": _get(username)}
 
 
-@router.route("POST", "/admin/staff/{username}/disable")
-def disable_staff(event, admin: Admin, username: str):
+@router.route("POST", "/staff/accounts/{username}/disable")
+def disable_account(event, staff: Staff, username: str):
     """Blocks sign-in and revokes refresh tokens. Issued ID tokens still work until they expire (60 min)."""
+    require(staff, "accounts:manage")
     user = _get(username)
-    _not_self(admin, user, "disable")
+    _not_self(staff, user, "disable")
     cognito().admin_disable_user(UserPoolId=STAFF_POOL_ID, Username=username)
     cognito().admin_user_global_sign_out(UserPoolId=STAFF_POOL_ID, Username=username)
-    _audit(admin, "staff.disable", user=user["email"], reason=json_body(event).get("reason"))
+    _audit(staff, "account.disable", user=user["email"], reason=json_body(event).get("reason"))
     return 200, {"user": _get(username)}
 
 
-@router.route("POST", "/admin/staff/{username}/enable")
-def enable_staff(event, admin: Admin, username: str):
+@router.route("POST", "/staff/accounts/{username}/enable")
+def enable_account(event, staff: Staff, username: str):
+    require(staff, "accounts:manage")
     user = _get(username)
     cognito().admin_enable_user(UserPoolId=STAFF_POOL_ID, Username=username)
-    _audit(admin, "staff.enable", user=user["email"])
+    _audit(staff, "account.enable", user=user["email"])
     return 200, {"user": _get(username)}
 
 
-@router.route("POST", "/admin/staff/{username}/reset-password")
-def reset_password(event, admin: Admin, username: str):
+@router.route("POST", "/staff/accounts/{username}/reset-password")
+def reset_password(event, staff: Staff, username: str):
     """Cognito emails a reset code; the user must set a new password at next sign-in. MFA is unchanged."""
+    require(staff, "accounts:manage")
     user = _get(username)
     cognito().admin_reset_user_password(UserPoolId=STAFF_POOL_ID, Username=username)
     cognito().admin_user_global_sign_out(UserPoolId=STAFF_POOL_ID, Username=username)
-    _audit(admin, "staff.reset_password", user=user["email"])
+    _audit(staff, "account.reset_password", user=user["email"])
     return 200, {"user": _get(username)}

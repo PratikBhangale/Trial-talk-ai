@@ -1,13 +1,15 @@
-# TrialTalk backend: staff, participant and admin APIs
+# TrialTalk backend: staff and participant APIs
 
-Serverless backend for three portals: the staff portal (coordinators, PIs), the participant website,
-and the admin portal (staff accounts and access). It follows the "Staff portal action" and "Reminders"
+Serverless backend for two portals: the staff portal (coordinators, PIs), the participant website,
+Staff are their own admins: staff accounts are managed inside the staff portal. It follows the "Staff portal action" and "Reminders"
 flows in the build plan:
 
 ```
 Cognito (staff pool | participant pool) → API Gateway HTTP API (JWT authorizer per app client)
   → staff_api / participant_api Lambda (per-action check) → RDS Data API → Aurora PostgreSQL (RLS)
-  → admin_api Lambda (admin group) → Cognito staff pool (no database access)
+  → staff_api /staff/accounts → Cognito staff pool (no database access for these routes)
+participant SOS button → participant_api → trial.emergency_alerts + immediate SES email → staff alerts widget
+every request → OpenTelemetry spans + metrics → staff observability widget (and OTLP, if configured)
 staff reminder actions → EventBridge Scheduler rem-<reminder_id> → reminder Lambda → WhatsApp template
 participant chat → participant_api → Layer 0 emergency check → AgentCore Runtime (trial_agent)
 ```
@@ -15,17 +17,17 @@ participant chat → participant_api → Layer 0 emergency check → AgentCore R
 ```
 backend/
   lambdas/                  one code asset shared by every function
-    common/                 db (Data API + set_config), auth (claims, require), http router,
+    common/                 db (Data API + set_config), auth (claims, require), http router, telemetry (OpenTelemetry),
                             scheduling (EventBridge Scheduler), whatsapp, safety (Layer 0), legacy_mirror
     staff_api/              /staff/* routes
     participant_api/        /me/* routes (incl. chat)
-    admin_api/              /admin/* routes: staff accounts, roles, sites (Cognito only)
+    (staff_api/accounts.py  /staff/accounts routes: staff accounts, roles, sites; Cognito only)
     reminder/               fired by Scheduler or "Send now"
     auth_triggers/          staff pre-token; participant passwordless login (code on WhatsApp)
     migrate/                schema.sql + custom resource that applies it and creates DB logins
   infra/                    CDK (TypeScript): TrialTalk-Data, TrialTalk-Scheduler, TrialTalk-Portal
   tests/                    unit tests + integration tests against a real local Postgres; fakes in local_env.py
-  devserver/                local test portals (staff, participant, admin) over the real handlers
+  devserver/                local test portals (staff, participant) over the real handlers
 ```
 
 ## API
@@ -72,21 +74,45 @@ POST /staff/participants/P-1001/reminders
 
 As the plan requires, staff only *schedule* doses here. No API or agent tool changes treatment.
 
-### Admin (`admin` group in the staff pool, signed in through the admin app client)
-
-The admin portal has its own app client, so its tokens are rejected on `/staff` and staff tokens are rejected on `/admin`. A user can be in a role group and `admin` at the same time; they sign in to each portal separately. `admin_api` only calls Cognito on the staff pool and has no database login, so an admin can grant access but never reads participant data.
+### Emergency alerts (staff, same roles and site scope)
 
 | Method | Path | What it does |
 | --- | --- | --- |
-| GET | `/admin/me` | The signed-in admin |
-| GET | `/admin/staff?q=` | Staff accounts with role, admin flag, sites, studies, enabled, Cognito status |
-| POST | `/admin/staff` | Invite: `email`, `role` (`coordinator` / `PI` / empty), `admin`, `site_ids`, `study_ids`, `name`. Cognito emails a temporary password; MFA setup is required at first sign-in |
-| GET / PATCH | `/admin/staff/{username}` | Read, or change `role`, `admin`, `site_ids`, `study_ids`, `name`. Takes effect at the user's next token refresh |
-| POST | `/admin/staff/{username}/disable` | Block sign-in and sign out everywhere (optional `reason`). Issued ID tokens last until expiry, at most 60 minutes |
-| POST | `/admin/staff/{username}/enable` | Re-enable |
-| POST | `/admin/staff/{username}/reset-password` | Cognito emails a reset code |
+| GET | `/staff/alerts?status=active\|resolved\|all` | Alerts at your sites, with participant name, phone and site. Default `active` (open + acknowledged), open and life-threatening first. `open` in the response is the count still waiting for a human |
+| POST | `/staff/alerts/{aid}/acknowledge` | "I have seen this." Idempotent; the first acknowledger is recorded |
+| POST | `/staff/alerts/{aid}/resolve` | `{"note": "..."}` is required: what happened and what was done. Resolved alerts stay for the record |
 
-Coordinators and PIs need at least one site. Admins can't disable themselves or remove their own admin access, so the last admin can't lock everyone out. Each change prints an `audit` line to CloudWatch.
+Alerts come from two places, both stored in `trial.emergency_alerts` (the one table beyond the plan's four, because alerts need a status lifecycle that append-only `clinical_events` cannot give them):
+- the participant's SOS button (`POST /me/emergency`, below), severity `life_threatening` by default;
+- Layer 0 emergency keywords in the web chat, which used to send only an email.
+
+Repeat presses while an alert is unresolved (30 minutes) are folded into it as `press_count`, so staff see one alert, not fifty, and the site gets one email. A press after resolution opens a new alert. The email carries no message content.
+
+### Staff accounts (staff are their own admins)
+
+There is no admin group, portal or API. Any coordinator or PI can manage accounts, through `/staff/accounts`. These routes only call Cognito on the staff pool and never read participant data.
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| GET | `/staff/accounts?q=` | Staff accounts with role, sites, studies, enabled, Cognito status |
+| POST | `/staff/accounts` | Invite: `email`, `role` (`coordinator` / `PI`), `site_ids`, `study_ids`, `name`. Cognito emails a temporary password; MFA setup is required at first sign-in |
+| GET / PATCH | `/staff/accounts/{username}` | Read, or change `role`, `site_ids`, `study_ids`, `name`. Takes effect at the user's next token refresh |
+| POST | `/staff/accounts/{username}/disable` | Block sign-in and sign out everywhere (optional `reason`). Issued ID tokens last until expiry, at most 60 minutes |
+| POST | `/staff/accounts/{username}/enable` | Re-enable |
+| POST | `/staff/accounts/{username}/reset-password` | Cognito emails a reset code |
+
+Everyone needs a role and at least one site. You can't disable your own account. Each change prints an `audit` line to CloudWatch. Note the consequence of dropping the admin tier: any staff member can invite a PI or grant sites. If that is too broad, restrict `accounts:manage` in `common/auth.py` to `PI`.
+
+### Observability (OpenTelemetry)
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| GET | `/staff/observability` | Recent spans (grouped into traces) and request metrics from this Lambda instance |
+
+`common/telemetry.py` uses the real OpenTelemetry SDK: a server span per request named by route template (`GET /staff/alerts`, never the URL), child spans for every database call (SQL verb only), the agent and WhatsApp, a `http.server.request.duration` histogram and counters such as `trialtalk.alerts.raised`. It continues an incoming W3C `traceparent`. No participant ids, SQL text or bodies go into telemetry (a test checks this).
+
+- Without the SDK installed it does nothing, and the widget says so.
+- The widget's window is per Lambda instance. For fleet-wide data set the `otlpEndpoint` CDK context (OTLP/HTTP) and `otelLayerArn` (a layer that carries `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http`, e.g. ADOT). They are empty by default; the infra change has not been synthesized or deployed.
 
 ### Participant (`custom:participant_id` from the token; never from the request)
 
@@ -96,8 +122,10 @@ Coordinators and PIs need at least one site. Admins can't disable themselves or 
 | GET | `/me/reminders` | Active reminders, plus `dose_schedule` (label, instructions, "Every day at 8:00 PM") |
 | GET | `/me/history?record_type=` | Own visits, doses, symptoms and consent questions (read-only) |
 | GET / POST | `/me/requests` | `{"kind": "reminder_change" \| "reminder_pause" \| "profile_change" \| "withdrawal" \| "whatsapp_opt_out" \| "contact_team" \| "history_correction", "message": "..."}`. Requests show up in `/staff/requests` |
+| POST | `/me/emergency` | The SOS button. An empty body is a complete request: it raises a `life_threatening` alert, emails the site team and returns the emergency instruction in the participant's language. Optional `message` and `severity` (`life_threatening` / `urgent` / `concern`) |
+| GET | `/me/emergency` | Own recent alerts and their status (open / acknowledged / resolved), so the page can show "your team has seen this" |
 | GET | `/me/chat` | Last 50 web chat messages |
-| POST | `/me/chat` | `{"text": "..."}` returns `{"reply", "emergency"}`. Emergency keywords (en/es) get the fixed emergency reply and an immediate team email, and never reach the model. Everything else goes to the deployed `trial_agent` |
+| POST | `/me/chat` | `{"text": "..."}` returns `{"reply", "emergency"}`. Emergency keywords (en/es) get the fixed emergency reply, a staff alert and an immediate team email, and never reach the model. Everything else goes to the deployed `trial_agent` |
 
 ## Decisions and departures from the plan
 
@@ -133,6 +161,7 @@ Coordinators and PIs need at least one site. Admins can't disable themselves or 
 python -m pytest backend/tests
 # plus integration tests: real handlers + schema + RLS on a throwaway local PostgreSQL 16
 conda create -p .pg -c conda-forge python=3.12 postgresql=16 psycopg pytest tzdata
+.pg/python -m pip install opentelemetry-sdk   # optional: telemetry tests and the Observability widget
 TT_PG_BIN=.pg/Library/bin .pg/python -m pytest backend/tests   # Linux/macOS: .pg/bin
 ```
 
@@ -145,23 +174,22 @@ TT_PG_BIN=.pg/Library/bin .pg/python backend/devserver/server.py      # then ope
 ```
 
 The server starts a throwaway Postgres and seeds synthetic data:
-- a bootstrap admin, `admin@example.org`
-- four staff users, created through `admin_api`: a coordinator and a PI at RIVERSIDE, a coordinator at LAKESIDE, and a coordinator covering both sites
+- one bootstrap staff user, `lead@example.org` (a coordinator at both sites), created the way you would in the Cognito console
+- three more staff users, invited through `/staff/accounts` as that user: a coordinator and a PI at RIVERSIDE, and a coordinator at LAKESIDE
 - participants P-1001…P-1004, three at RIVERSIDE and one at LAKESIDE
 
 Each portal is its own page, as it will be deployed:
 
-- **`/staff`** (coordinators and PIs): enroll, edit and withdraw participants; create dose, visit or one-time reminders; pause, resume, change the time, send now or cancel; timeline, adherence, communications and the request queue.
-- **`/participant`**: dose schedule, profile, history, requests, and chat. The emergency keyword buttons show the Layer 0 path.
-- **`/admin`**: invite staff, set the role, admin access, sites and studies, disable or enable accounts, reset passwords.
+- **`/staff`** (coordinators and PIs): widgets across the top, with **Emergency alerts** (refreshes every 4 s, pulses and beeps on a new one, acknowledge / resolve), **Token usage**, **Team** (invite, edit, disable, reset staff accounts) and, at the bottom, **Observability** (requests, error rate, average and slowest latency, counters); then enroll, edit and withdraw participants; create dose, visit or one-time reminders; pause, resume, change the time, send now or cancel; timeline, adherence, communications and the request queue.
+- **`/participant`**: a big **I NEED HELP NOW** button (one press, no confirmation, no input) that shows the instruction and then live alert status; dose schedule, profile, history, requests, and chat. The emergency keyword buttons show the Layer 0 path.
 - **`/inspector`** (dev only, not a portal): what would have gone to AWS, meaning EventBridge schedules (**Fire** runs one the way Scheduler would), the WhatsApp outbox, SES emails, agent calls and both user pools.
 
 Each page has a dev sign-in picker in place of Cognito. The server builds the token claims from fake user pools the way Cognito would, including the real staff pre-token trigger. Sign-in follows those pools:
-- Whatever the admin portal changes applies on the staff portal's next request.
+- Whatever the Team widget changes applies on the next request.
 - Disabled staff and withdrawn participants are refused.
 - Each portal only accepts its own users.
 
-Everything below API Gateway is real code against real RLS. Every API call appears in the page's request log. Chat replies come from a local echo agent; `--real-agent` sends them to the deployed runtime instead, which needs boto3 and AWS credentials. Stop the server with Ctrl+C, which deletes the database.
+Everything below API Gateway is real code against real RLS. Chat replies come from a local echo agent; `--real-agent` sends them to the deployed runtime instead, which needs boto3 and AWS credentials. Stop the server with Ctrl+C, which deletes the database.
 
 ## Deploy
 
@@ -169,7 +197,7 @@ Everything below API Gateway is real code against real RLS. Every API call appea
 2. Set the context in `infra/cdk.json`:
    - `whatsappPhoneNumberId` (the `phone-number-id-…` ARN of the WhatsApp number)
    - `alertFrom` and `alertTo` (an SES-verified sender, plus the coordinator address)
-   - `staffCallbackUrls`, `adminCallbackUrls` and `corsOrigins` for the portal URLs
+   - `staffCallbackUrls` and `corsOrigins` for the portal URLs
 3. Deploy:
 
 ```bash
@@ -183,7 +211,7 @@ The first deploy creates Aurora and runs the migration (several minutes). Output
 
 ### Console steps (the plan leaves these to the console)
 
-- **The first admin.** Create one user in the `trialtalk-staff` pool and add them to the `admin` group. After that, invite and manage staff from the admin portal (`/admin` routes). Doing it by hand also works: add each user to the `coordinator` or `PI` group and set `custom:site_ids` (e.g. `RIVERSIDE`) and `custom:study_ids` (e.g. `KOA-301`).
+- **The first staff user.** Create one user in the `trialtalk-staff` pool, add them to the `coordinator` or `PI` group and set `custom:site_ids` (e.g. `RIVERSIDE`) and `custom:study_ids` (e.g. `KOA-301`). After that, invite everyone else from the staff portal's Team widget (`/staff/accounts`).
 - **WhatsApp templates**, IRB-approved, one per language:
   - `dose_reminder_v2`: utility, `{{1}}` dose label, `{{2}}` instructions, 3 quick-reply buttons
   - `visit_reminder_v1`

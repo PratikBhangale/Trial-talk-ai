@@ -12,6 +12,8 @@ from datetime import date, datetime
 
 import boto3
 
+from common import telemetry
+
 CLUSTER_ARN = os.environ.get("DB_CLUSTER_ARN", "")
 SECRET_ARN = os.environ.get("DB_SECRET_ARN", "")
 DATABASE = os.environ.get("DB_NAME", "trialtalk")
@@ -73,7 +75,9 @@ class Tx:
         }
         if self.transaction_id:
             kwargs["transactionId"] = self.transaction_id
-        return client().execute_statement(**kwargs)
+        verb = (sql.lstrip().split(None, 1) or ["?"])[0].upper()  # the SQL verb only; never the statement
+        with telemetry.span(f"db {verb}", **{"db.system": "postgresql", "db.operation.name": verb}):
+            return client().execute_statement(**kwargs)
 
     def query(self, sql: str, **params) -> list[dict]:
         """Run a statement and return its rows as dicts (casts belong in the SQL, e.g. :id::uuid)."""

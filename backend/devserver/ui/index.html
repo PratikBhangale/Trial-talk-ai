@@ -14,18 +14,13 @@
   <div class="cards">
     <a class="panel" href="/staff">
       <h2>Staff portal</h2>
-      <p>Coordinators and PIs: enroll, edit and withdraw participants, set reminders and dosing schedules, review requests.</p>
+      <p>Coordinators and PIs: emergency alerts, enroll and withdraw participants, reminders and dosing, requests, staff accounts, OpenTelemetry.</p>
       <p class="muted">Production: staff user pool, staff app client, MFA, /staff routes. Scoped by site through RLS.</p>
     </a>
     <a class="panel" href="/participant">
       <h2>Participant site</h2>
-      <p>Participants: medication schedule, history, requests to the study team, and chat with the agent.</p>
+      <p>Participants: one-press emergency button, medication schedule, history, requests to the study team, and chat with the agent.</p>
       <p class="muted">Production: participant user pool, code on WhatsApp, /me routes. Scoped to the participant through RLS.</p>
-    </a>
-    <a class="panel" href="/admin">
-      <h2>Admin portal</h2>
-      <p>Admins: invite staff, set the coordinator or PI role, sites and studies, disable accounts, reset passwords.</p>
-      <p class="muted">Production: staff pool <code>admin</code> group, admin app client, /admin routes. Cognito only, no database access.</p>
     </a>
     <a class="panel" href="/inspector">
       <h2>Inspector (dev only)</h2>

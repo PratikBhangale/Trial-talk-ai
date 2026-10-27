@@ -5,7 +5,7 @@ import re
 import traceback
 from typing import Callable
 
-from common import db
+from common import db, telemetry
 
 
 class HttpError(Exception):
@@ -45,22 +45,34 @@ class Router:
     """Routes '{METHOD} /path/{param}' to handler(event, claims, **params)."""
 
     def __init__(self):
-        self.routes: list[tuple[str, re.Pattern, Callable]] = []
+        self.routes: list[tuple[str, re.Pattern, Callable, str]] = []
 
     def route(self, method: str, path: str):
         pattern = re.compile("^" + re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", path) + "$")
 
         def register(fn):
-            self.routes.append((method, pattern, fn))
+            self.routes.append((method, pattern, fn, path))
             return fn
         return register
+
+    def include(self, other: "Router") -> None:
+        """Serve another module's routes from this router (one Lambda, several files)."""
+        self.routes += other.routes
 
     def dispatch(self, event: dict, claims_fn: Callable[[dict], dict]) -> dict:
         method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
         path = event.get("rawPath", "/")
+        template = next((tpl for m, pattern, _, tpl in self.routes if m == method and pattern.match(path)),
+                        "unmatched")  # the route template, never the URL: ids stay out of telemetry
+        with telemetry.request_span(method, template, event.get("headers")) as span:
+            resp = self._dispatch(event, claims_fn, method, path)
+            telemetry.finish_request(span, resp["statusCode"])
+            return resp
+
+    def _dispatch(self, event: dict, claims_fn: Callable[[dict], dict], method: str, path: str) -> dict:
         try:
             path_matched = False
-            for m, pattern, fn in self.routes:
+            for m, pattern, fn, _ in self.routes:
                 match = pattern.match(path)
                 if not match:
                     continue

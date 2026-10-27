@@ -8,20 +8,17 @@ from dataclasses import dataclass
 
 from common.http import HttpError
 
-# Per the RBAC table in the build plan. Both staff roles manage participants and reminders;
+# Per the RBAC table in the build plan. Both staff roles manage participants and reminders, triage emergency
+# alerts, manage staff accounts ("accounts:manage": staff are their own admins) and read observability;
 # AE sign-off ("ae:sign") is PI only.
-PERMISSIONS = {
-    "coordinator": {
-        "participant:read", "participant:write", "participant:withdraw",
-        "reminder:read", "reminder:write", "reminder:send",
-        "events:read", "requests:read",
-    },
-    "PI": {
-        "participant:read", "participant:write", "participant:withdraw",
-        "reminder:read", "reminder:write", "reminder:send",
-        "events:read", "requests:read", "ae:sign",
-    },
+_COMMON = {
+    "participant:read", "participant:write", "participant:withdraw",
+    "reminder:read", "reminder:write", "reminder:send",
+    "events:read", "requests:read", "requests:write",
+    "alerts:read", "alerts:write",
+    "accounts:manage", "ops:read",
 }
+PERMISSIONS = {"coordinator": set(_COMMON), "PI": _COMMON | {"ae:sign"}}
 
 
 def _claims(event: dict) -> dict:
@@ -70,24 +67,6 @@ def staff_claims(event: dict) -> Staff:
         site_ids=sites,
         study_ids=_split(c.get("study_ids") or c.get("custom:study_ids")),
     )
-
-
-@dataclass
-class Admin:
-    """Staff-pool user in the 'admin' group. Manages staff accounts only; no participant data."""
-    email: str
-    username: str
-
-    @property
-    def actor(self) -> str:
-        return f"admin:{self.email}"
-
-
-def admin_claims(event: dict) -> Admin:
-    c = _claims(event)
-    if "admin" not in _split(c.get("cognito:groups")):
-        raise HttpError(403, "Not an admin")
-    return Admin(email=c.get("email", ""), username=c.get("cognito:username") or c.get("sub", ""))
 
 
 def participant_claims(event: dict) -> Participant:

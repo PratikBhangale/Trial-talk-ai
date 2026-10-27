@@ -1,19 +1,19 @@
-"""Local test UI: staff, participant and admin portals over the real Lambda handlers. No AWS needed.
+"""Local test UI: staff and participant portals over the real Lambda handlers. No AWS needed.
 
     TT_PG_BIN=<folder with initdb/pg_ctl> python backend/devserver/server.py [--port 8787] [--real-agent]
 
 Starts a throwaway PostgreSQL with the real schema, seeds synthetic staff and participants, and serves:
 
-    /staff, /participant, /admin    one page per portal (ui/*.html), as they will be deployed separately
+    /staff, /participant            one page per portal (ui/*.html), as they will be deployed separately
     /inspector                      dev only: what would have gone to AWS
-    /api/staff/...  -> staff_api.handler        signed in as a staff-pool user (coordinator / PI)
+    /api/staff/...  -> staff_api.handler        signed in as a staff-pool user (coordinator / PI); this includes
+                                                emergency alerts, staff accounts and the OpenTelemetry widget
     /api/me...      -> participant_api.handler  signed in as a participant-pool user
-    /api/admin/...  -> admin_api.handler        signed in as a staff-pool user in the 'admin' group
 
 "Sign-in" is the X-Dev-Identity header (<portal>:<username>) in place of Cognito + the JWT authorizer.
 The server builds the token claims from the fake user pools the way Cognito would, including the
-real staff pre-token trigger, so what the admin portal changes (role, sites, disabled) is what the
-staff portal gets. Database calls run as each Lambda's own login, so RLS and grants are real.
+real staff pre-token trigger, so what the staff "Team" panel changes (role, sites, disabled) is what the
+next request gets. OpenTelemetry needs `pip install opentelemetry-sdk`; without it the widget says so. Database calls run as each Lambda's own login, so RLS and grants are real.
 Scheduler, WhatsApp, SES and the agent are fakes (tests/local_env.py), unless --real-agent, which
 sends web chat to the deployed AgentCore runtime with your local AWS credentials.
 Synthetic data only. Everything is deleted when the server stops.
@@ -25,8 +25,9 @@ import json
 import os
 import sys
 import traceback
+import threading
 import types
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -34,23 +35,26 @@ HERE = Path(__file__).resolve().parent
 UI = HERE / "ui"
 sys.path.insert(0, str(HERE.parent / "tests"))
 
-from local_env import (FakeAgentCore, FakeCognito, FakeRdsData, FakeScheduler,  # noqa: E402
+from local_env import (FakeAgentCore, fake_usage, FakeCognito, FakeRdsData, FakeScheduler,  # noqa: E402
                        FakeWhatsApp, LocalPostgres)
 
-from common import db, scheduling, whatsapp  # noqa: E402
-import admin_api.handler as admin  # noqa: E402
+from common import db, scheduling, telemetry, whatsapp  # noqa: E402
 from auth_triggers import staff_pre_token  # noqa: E402
 import participant_api.handler as participant  # noqa: E402
 import reminder.handler as reminder  # noqa: E402
+import staff_api.accounts as accounts  # noqa: E402
 import staff_api.handler as staff  # noqa: E402
 
-PAGES = {"/": "index.html", "/staff": "staff.html", "/participant": "participant.html", "/admin": "admin.html",
-         "/inspector": "inspector.html", "/ui/common.css": "common.css", "/ui/common.js": "common.js"}
+PAGES = {"/": "index.html", "/staff": "staff.html", "/participant": "participant.html",
+         "/inspector": "inspector.html", "/ui/common.css": "common.css", "/ui/common.js": "common.js",
+         "/ui/widgets.js": "widgets.js"}
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8"}
 
-# The first admin is created in the console (the plan leaves Cognito users to the console); the rest via /admin.
-BOOTSTRAP_ADMIN = "admin@example.org"
+# The first staff user is created in the Cognito console (the plan leaves that to the console); every other
+# account is invited from the staff portal's Team panel (/staff/accounts), signed in as that first user.
+BOOTSTRAP_STAFF = {"email": "lead@example.org", "name": "Jamie Fox", "role": "coordinator",
+                   "site_ids": ["RIVERSIDE", "LAKESIDE"], "study_ids": ["KOA-301"]}
 SEED_STAFF = [
     {"email": "coordinator@riverside.example.org", "name": "Riley Chen", "role": "coordinator",
      "site_ids": ["RIVERSIDE"], "study_ids": ["KOA-301"]},
@@ -58,8 +62,6 @@ SEED_STAFF = [
      "site_ids": ["RIVERSIDE"], "study_ids": ["KOA-301"]},
     {"email": "coordinator@lakeside.example.org", "name": "Morgan Diaz", "role": "coordinator",
      "site_ids": ["LAKESIDE"], "study_ids": ["KOA-301"]},
-    {"email": "lead@example.org", "name": "Jamie Fox", "role": "coordinator",
-     "site_ids": ["RIVERSIDE", "LAKESIDE"], "study_ids": ["KOA-301"]},
 ]
 
 # Synthetic participants (555 numbers, example.org addresses). Never real PHI.
@@ -79,6 +81,10 @@ SEED_PARTICIPANTS = [
 ]
 
 fakes = types.SimpleNamespace()
+# Requests are served on threads (browsers open idle speculative connections that would otherwise stall a
+# single-threaded server for seconds), but the Lambda code and the fakes share state: db.SECRET_ARN is switched per
+# request. So everything that runs a handler or touches the fakes holds this lock; static files do not.
+LOCK = threading.RLock()
 pg: LocalPostgres | None = None
 
 
@@ -92,7 +98,7 @@ class EchoAgent(FakeAgentCore):
         self.calls.append({"session": runtimeSessionId, **body})
         reply = (f"(local fake agent) You said: \"{body['text']}\". Start the server with --real-agent "
                  "to talk to the deployed trial_agent.")
-        return {"response": io.BytesIO(json.dumps({"reply": reply}).encode())}
+        return {"response": io.BytesIO(json.dumps({"reply": reply, "usage": fake_usage(body["text"], reply)}).encode())}
 
 
 def wire(real_agent: bool) -> None:
@@ -106,8 +112,9 @@ def wire(real_agent: bool) -> None:
     staff.cognito = lambda: fakes.participant_pool  # staff_api creates participant logins
     staff.PARTICIPANT_POOL_ID = "local-participant-pool"
     staff.lambda_client = lambda: types.SimpleNamespace(invoke=_invoke_reminder)
-    admin.cognito = lambda: fakes.staff_pool
-    admin.STAFF_POOL_ID = "local-staff-pool"
+    accounts.cognito = lambda: fakes.staff_pool
+    accounts.STAFF_POOL_ID = "local-staff-pool"
+    telemetry.init()
     participant.ses = lambda: types.SimpleNamespace(send_email=lambda **kw: fakes.emails.append(kw))
     participant.ALERT_FROM, participant.ALERT_TO = "alerts@example.org", ["coordinator@example.org"]
     if real_agent:
@@ -187,14 +194,16 @@ def seed() -> None:
     fakes.participant_pool.__init__()
     fakes.staff_pool.__init__()
 
-    pool = fakes.staff_pool
-    pool.admin_create_user(UserPoolId="", Username=BOOTSTRAP_ADMIN, UserAttributes=[
-        {"Name": "email", "Value": BOOTSTRAP_ADMIN}, {"Name": "name", "Value": "Site IT admin"}])
-    pool.admin_set_user_password(Username=BOOTSTRAP_ADMIN)
-    pool.admin_add_user_to_group(UserPoolId="", Username=BOOTSTRAP_ADMIN, GroupName="admin")
-    admin_claims = {"email": BOOTSTRAP_ADMIN, "cognito:username": BOOTSTRAP_ADMIN, "cognito:groups": "[admin]"}
+    pool, boot = fakes.staff_pool, BOOTSTRAP_STAFF
+    pool.admin_create_user(UserPoolId="", Username=boot["email"], UserAttributes=[
+        {"Name": "email", "Value": boot["email"]}, {"Name": "name", "Value": boot["name"]},
+        {"Name": "custom:site_ids", "Value": ",".join(boot["site_ids"])},
+        {"Name": "custom:study_ids", "Value": ",".join(boot["study_ids"])}])
+    pool.admin_set_user_password(Username=boot["email"])
+    pool.admin_add_user_to_group(UserPoolId="", Username=boot["email"], GroupName=boot["role"])
+    lead = staff_token(boot["email"])
     for user in SEED_STAFF:
-        status, out = call_handler(admin, None, admin_claims, "POST", "/admin/staff", json.dumps(user).encode(), {})
+        status, out = call_handler(staff, None, lead, "POST", "/staff/accounts", json.dumps(user).encode(), {})
         assert status == 201, out
         pool.admin_set_user_password(Username=user["email"])  # as if they finished first sign-in
 
@@ -212,7 +221,8 @@ def seed() -> None:
     assert status == 201, out
     # One send, so the outbox, communications and DOSE timeline have something in them.
     call_handler(staff, "staff", coord, "POST", f"/staff/reminders/{out['reminder']['reminder_id']}/send-now", None, {})
-    print(f"Seeded admin + {len(SEED_STAFF)} staff users, participants {', '.join(pids)}")
+    telemetry.reset()  # the window should start with the first thing you do, not the seeding
+    print(f"Seeded {1 + len(SEED_STAFF)} staff users, participants {', '.join(pids)}")
 
 
 def identities() -> dict:
@@ -229,7 +239,6 @@ def identities() -> dict:
         "SELECT participant_id, full_name, site_id, status FROM pii.participants ORDER BY participant_id")}
     return {
         "staff": [staff_row(u) for u in sp.users if sp.groups.get(u, set()) & {"coordinator", "PI"}],
-        "admin": [staff_row(u) for u in sp.users if "admin" in sp.groups.get(u, set())],
         "participant": [{"username": u, **people.get(u, {}), "enabled": u not in pp.disabled} for u in sorted(pp.users)],
     }
 
@@ -285,8 +294,6 @@ class Handler(BaseHTTPRequestHandler):
         username = unquote(username)
         if path.startswith("/staff/"):
             want, module, login, token = "staff", staff, "staff", staff_token
-        elif path.startswith("/admin/"):
-            want, module, login, token = "admin", admin, None, staff_token  # same pool, admin app client
         elif path == "/me" or path.startswith("/me/"):
             want, module, login, token = "participant", participant, "participant", participant_token
         else:
@@ -294,14 +301,19 @@ class Handler(BaseHTTPRequestHandler):
         # Each portal has its own app client, so a token from one is rejected by the others' authorizers.
         if portal != want or not username:
             return self._send(401, {"error": f"Sign in to the {want} portal"})
-        try:
-            claims = token(username)
-        except AuthError as e:
-            return self._send(401, {"error": f"Sign-in refused: {e}"})
-        status, out = call_handler(module, login, claims, self.command, path, body, query)
+        with LOCK:
+            try:
+                claims = token(username)
+            except AuthError as e:
+                return self._send(401, {"error": f"Sign-in refused: {e}"})
+            status, out = call_handler(module, login, claims, self.command, path, body, query)
         self._send(status, out)
 
     def _dev(self, path: str, body: bytes | None):
+        with LOCK:
+            return self._dev_locked(path, body)
+
+    def _dev_locked(self, path: str, body: bytes | None):
         if path == "/dev/identities" and self.command == "GET":
             return self._send(200, identities())
         if path == "/dev/outbox" and self.command == "GET":
@@ -350,11 +362,11 @@ def main():
     try:
         wire(args.real_agent)
         seed()
-        # Single-threaded on purpose: db.SECRET_ARN is module state, switched per request.
-        server = HTTPServer(("127.0.0.1", args.port), Handler)
+        server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
         base = f"http://127.0.0.1:{args.port}"
         print(f"TrialTalk portals (Ctrl+C to stop):\n  staff        {base}/staff\n  participant  {base}/participant\n"
-              f"  admin        {base}/admin\n  inspector    {base}/inspector  (dev only)")
+              f"  inspector    {base}/inspector  (dev only)")
+        server.daemon_threads = True
         server.serve_forever()
     except KeyboardInterrupt:
         pass

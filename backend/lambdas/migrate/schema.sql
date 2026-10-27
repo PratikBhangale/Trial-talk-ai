@@ -1,6 +1,8 @@
 -- TrialTalk schema (build plan, "Data model" + "Authentication and RBAC").
 -- Applied by the migrate Lambda on every deploy, so every statement is idempotent.
 -- Four tables only; signatures, attachments, audit history and token usage live inside them.
+-- (Plus trial.emergency_alerts below: alerts need an acknowledge / resolve lifecycle that append-only
+-- clinical_events cannot give them.)
 --
 -- Additions beyond the plan (kept minimal):
 --   * channel 'web' on trial.communications for the participant website chat and requests
@@ -179,7 +181,33 @@ CREATE INDEX IF NOT EXISTS reminders_pid_idx ON trial.reminders (participant_id,
 CREATE INDEX IF NOT EXISTS reminders_next_idx ON trial.reminders (status, next_send_at);
 
 ALTER TABLE trial.communications ADD COLUMN IF NOT EXISTS reminder_id uuid REFERENCES trial.reminders(reminder_id);
+-- A staff reply to a participant request (msg_type 'staff_reply') points at the request it answers.
+ALTER TABLE trial.communications ADD COLUMN IF NOT EXISTS reply_to_comm_id uuid REFERENCES trial.communications(comm_id);
+CREATE INDEX IF NOT EXISTS communications_reply_idx ON trial.communications (reply_to_comm_id);
 ALTER TABLE trial.clinical_events ADD COLUMN IF NOT EXISTS reminder_id uuid REFERENCES trial.reminders(reminder_id);
+
+-- ---------------------------------------------------------------- 5. trial.emergency_alerts
+-- One row per emergency: the participant's SOS button, or Layer 0 keywords in the web chat. Staff acknowledge and
+-- resolve them; repeat presses while one is open are folded into it (press_count) so staff see one alert, not fifty.
+CREATE TABLE IF NOT EXISTS trial.emergency_alerts (
+  alert_id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  participant_id   text NOT NULL REFERENCES pii.participants(participant_id),
+  severity         text NOT NULL DEFAULT 'life_threatening' CHECK (severity IN ('life_threatening','urgent','concern')),
+  source           text NOT NULL CHECK (source IN ('sos_button','chat_keyword')),
+  message          text,
+  keywords         text[],
+  status           text NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','resolved')),
+  press_count      int NOT NULL DEFAULT 1,
+  last_pressed_at  timestamptz NOT NULL DEFAULT now(),
+  acknowledged_by  text,
+  acknowledged_at  timestamptz,
+  resolved_by      text,
+  resolved_at      timestamptz,
+  resolution_note  text,
+  created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS emergency_alerts_status_idx ON trial.emergency_alerts (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS emergency_alerts_pid_idx ON trial.emergency_alerts (participant_id, created_at DESC);
 
 -- ---------------------------------------------------------------- roles
 DO $$ BEGIN CREATE ROLE agent_role NOLOGIN;       EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -232,16 +260,25 @@ GRANT INSERT (participant_id, record_type, source, parent_event_id, scheduled_at
   verbatim_text, details, created_by) ON trial.clinical_events TO participant_role;
 GRANT SELECT (reminder_id, participant_id, label, reminder_type, template_params, cron_expr, send_at, timezone,
   starts_on, ends_on, status, next_send_at) ON trial.reminders TO participant_role;
-GRANT SELECT (comm_id, participant_id, channel, direction, msg_type, subject, body_text, created_at)
+GRANT SELECT (comm_id, participant_id, channel, direction, msg_type, subject, body_text, created_at, reply_to_comm_id)
   ON trial.communications TO participant_role;
-GRANT INSERT (participant_id, channel, direction, msg_type, subject, body_text, session_id, latency_ms)
-  ON trial.communications TO participant_role;
+GRANT INSERT (participant_id, channel, direction, msg_type, subject, body_text, session_id, latency_ms,
+  input_tokens, output_tokens, model_id) ON trial.communications TO participant_role;
+
+-- Emergency alerts. Participants raise and re-press their own; staff triage; the agent/router can only read.
+GRANT SELECT, INSERT ON trial.emergency_alerts TO portal_role, messaging_role;
+GRANT UPDATE (status, acknowledged_by, acknowledged_at, resolved_by, resolved_at, resolution_note)
+  ON trial.emergency_alerts TO portal_role;
+GRANT SELECT ON trial.emergency_alerts TO participant_role;
+GRANT INSERT (participant_id, severity, source, message, keywords) ON trial.emergency_alerts TO participant_role;
+GRANT UPDATE (press_count, last_pressed_at, message) ON trial.emergency_alerts TO participant_role;
 
 -- ---------------------------------------------------------------- row-level security
 ALTER TABLE pii.participants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trial.clinical_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trial.communications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trial.reminders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trial.emergency_alerts ENABLE ROW LEVEL SECURITY;
 
 -- Staff: their sites only
 DROP POLICY IF EXISTS site_scope ON pii.participants;
@@ -255,6 +292,9 @@ CREATE POLICY site_scope ON trial.communications FOR ALL TO portal_role
   USING (participant_id IN (SELECT participant_id FROM pii.participants));
 DROP POLICY IF EXISTS site_scope ON trial.reminders;
 CREATE POLICY site_scope ON trial.reminders FOR ALL TO portal_role
+  USING (participant_id IN (SELECT participant_id FROM pii.participants));
+DROP POLICY IF EXISTS site_scope ON trial.emergency_alerts;
+CREATE POLICY site_scope ON trial.emergency_alerts FOR ALL TO portal_role
   USING (participant_id IN (SELECT participant_id FROM pii.participants));
 
 -- Participants: own rows only (app.participant_id is set from the Cognito token)
@@ -278,6 +318,10 @@ CREATE POLICY own_requests ON trial.communications FOR INSERT TO participant_rol
 DROP POLICY IF EXISTS own_web_messages ON trial.communications;
 CREATE POLICY own_web_messages ON trial.communications FOR SELECT TO participant_role
   USING (participant_id = current_setting('app.participant_id', true) AND channel = 'web');
+DROP POLICY IF EXISTS own_alerts ON trial.emergency_alerts;
+CREATE POLICY own_alerts ON trial.emergency_alerts FOR ALL TO participant_role
+  USING (participant_id = current_setting('app.participant_id', true))
+  WITH CHECK (participant_id = current_setting('app.participant_id', true));
 
 -- Service roles (router, reminder, parser Lambdas; agent). Their tools are bound to one participant in code.
 DROP POLICY IF EXISTS service_all ON pii.participants;
@@ -286,10 +330,12 @@ DROP POLICY IF EXISTS service_all ON trial.clinical_events;
 CREATE POLICY service_all ON trial.clinical_events FOR ALL TO messaging_role, agent_role USING (true);
 DROP POLICY IF EXISTS service_all ON trial.communications;
 CREATE POLICY service_all ON trial.communications FOR ALL TO messaging_role, agent_role USING (true);
+DROP POLICY IF EXISTS service_all ON trial.emergency_alerts;
+CREATE POLICY service_all ON trial.emergency_alerts FOR SELECT TO messaging_role USING (true);
 DROP POLICY IF EXISTS service_all ON trial.reminders;
 CREATE POLICY service_all ON trial.reminders FOR ALL TO messaging_role, agent_role USING (true);
 
 -- Clinical records are append-only for everyone; reminders and messages are cancelled, never deleted
 REVOKE UPDATE, DELETE, TRUNCATE ON trial.clinical_events FROM PUBLIC, agent_role, messaging_role, portal_role, participant_role;
-REVOKE DELETE, TRUNCATE ON trial.communications, trial.reminders FROM PUBLIC, agent_role, messaging_role, portal_role, participant_role;
+REVOKE DELETE, TRUNCATE ON trial.communications, trial.reminders, trial.emergency_alerts FROM PUBLIC, agent_role, messaging_role, portal_role, participant_role;
 REVOKE DELETE, TRUNCATE ON pii.participants FROM PUBLIC, agent_role, messaging_role, portal_role, participant_role;

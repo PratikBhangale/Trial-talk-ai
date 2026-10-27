@@ -1,4 +1,4 @@
-// Shared helpers for the three portals and the inspector.
+// Shared helpers for the two portals and the inspector.
 // "Sign-in" here is a dev stand-in for Cognito: the chosen user goes in the X-Dev-Identity header and the
 // dev server turns it into the claims the JWT authorizer would pass. Real portals swap this for Cognito tokens.
 
@@ -7,7 +7,7 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const TT = { portal: null, user: null, onSignIn: null };
-const PORTALS = { staff: 'Staff portal', participant: 'Participant site', admin: 'Admin portal' };
+const PORTALS = { staff: 'Staff portal', participant: 'Participant site' };
 
 function store(k, v) {
   try { if (v !== undefined) localStorage.setItem('tt.' + k, v); return localStorage.getItem('tt.' + k); } catch { return null; }
@@ -20,16 +20,16 @@ function toast(msg, bad) {
 }
 
 // ------------------------------------------------------------ API
-async function api(method, path, body) {
-  if (!TT.user) { toast('Sign in first', true); throw new Error('signed out'); }
+// opts.quiet: background polling. No error toast, so widgets can refresh freely.
+async function api(method, path, body, opts = {}) {
+  if (!TT.user) { if (!opts.quiet) toast('Sign in first', true); throw new Error('signed out'); }
   const identity = `${TT.portal}:${encodeURIComponent(TT.user)}`;
   const headers = { 'X-Dev-Identity': identity };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch('/api' + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
-  logCall(method, path, body, res.status, data);
   if (!res.ok) {
-    toast(`${res.status}: ${data.error || data.message || 'Request failed'}`, true);
+    if (!opts.quiet) toast(`${res.status}: ${data.error || data.message || 'Request failed'}`, true);
     throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status });
   }
   return data;
@@ -42,18 +42,6 @@ async function dev(method, path) {
   return data;
 }
 
-function logCall(method, path, body, status, data) {
-  const box = $('#logEntries');
-  if (!box) return;
-  if (box.classList.contains('muted')) { box.classList.remove('muted'); box.innerHTML = ''; }
-  const d = document.createElement('details'); d.className = 'entry';
-  d.innerHTML = `<summary><span class="status-${String(status)[0]}">${status}</span> ${esc(method)} ${esc(path)} <span class="muted">as ${esc(TT.user)}</span></summary>`
-    + (body !== undefined ? `<div class="muted">request</div><pre>${esc(JSON.stringify(body, null, 2))}</pre>` : '')
-    + `<div class="muted">response</div><pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
-  box.prepend(d);
-  while (box.children.length > 40) box.lastChild.remove();
-}
-
 // ------------------------------------------------------------ rendering
 function fmt(v) {
   if (v === null || v === undefined || v === '') return '<span class="muted">-</span>';
@@ -63,7 +51,7 @@ function fmt(v) {
 }
 
 const STATUS_WORDS = new Set(['active', 'paused', 'draft', 'cancelled', 'completed', 'enrolled', 'screening', 'prospect',
-  'withdrawn', 'screen_failed', 'enabled', 'disabled']);
+  'withdrawn', 'screen_failed', 'enabled', 'disabled', 'open', 'acknowledged', 'resolved']);
 
 function table(rows, cols, extra) {
   if (!rows || !rows.length) return '<span class="muted">Nothing yet.</span>';
@@ -77,7 +65,7 @@ function table(rows, cols, extra) {
 
 function chip(status) {
   const cls = { active: 'ok', enrolled: 'ok', enabled: 'ok', paused: 'warn', draft: 'warn', screening: 'warn',
-    withdrawn: 'bad', cancelled: 'bad', screen_failed: 'bad', disabled: 'bad' }[status] || '';
+    withdrawn: 'bad', cancelled: 'bad', screen_failed: 'bad', disabled: 'bad', open: 'bad', acknowledged: 'warn', resolved: 'ok' }[status] || '';
   return `<span class="chip ${cls}">${esc(status)}</span>`;
 }
 
@@ -102,7 +90,7 @@ function formData(form) {
 function identityLabel(portal, u) {
   const off = u.enabled === false ? ' (disabled)' : '';
   if (portal === 'participant') return `${u.username} ${u.full_name || ''} (${u.status || 'no record'})${off}`;
-  const role = u.groups.filter(g => g !== 'admin').join('+');
+  const role = u.groups.join('+');
   return `${u.name || u.username} · ${u.username}${role ? ' · ' + role : ''}${portal === 'staff' ? ' · ' + u.site_ids : ''}${off}`;
 }
 
@@ -130,12 +118,6 @@ function renderShell(portal, subtitle) {
       <button class="small" id="resetBtn" title="Delete everything and reload the synthetic seed data">Reset data</button>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', '<div id="toast"></div>');
-  $('main').insertAdjacentHTML('beforeend', `
-    <div class="panel" id="log">
-      <h2>Request log <span class="spacer"></span><button class="small" id="clearLog">Clear</button></h2>
-      <div id="logEntries" class="muted">Every API call shows up here with its response.</div>
-    </div>`);
-  $('#clearLog').onclick = () => { $('#logEntries').innerHTML = ''; };
 }
 
 // Call once per page: renders header + log, fills the sign-in picker, and calls onSignIn(user|null) on change.

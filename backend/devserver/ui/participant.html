@@ -11,6 +11,14 @@
 <main>
   <div class="panel signed-out" data-signed-out>Sign in as a participant. In production this is a one-time code sent on WhatsApp.</div>
 
+  <div class="hidden" data-signed-in>
+    <div class="panel" id="sosPanel">
+      <button class="sos-btn" id="sosBtn">I NEED HELP NOW</button>
+      <div class="muted" style="margin-top:6px;text-align:center">One press alerts your study team right away. Always call 911 (or your local emergency number) if you are in danger.</div>
+      <div class="sos-status hidden" id="sosStatus" role="status" aria-live="assertive"></div>
+    </div>
+  </div>
+
   <div class="grid2 hidden" data-signed-in>
     <div>
       <div class="panel">
@@ -66,8 +74,30 @@
 
 <script src="/ui/common.js"></script>
 <script>
+const SOS_STEP = { open: 'Your study team has been alerted and has not opened it yet.',
+  acknowledged: 'Your study team has seen your alert and is responding.', resolved: 'Your study team has closed this alert.' };
+let sosTimer;
+
+async function showSos(reply) {
+  const { alerts } = await api('GET', '/me/emergency', undefined, { quiet: true }).catch(() => ({ alerts: [] }));
+  const a = alerts.find(x => x.status !== 'resolved') || alerts[0];
+  const box = $('#sosStatus');
+  if (!a && !reply) return box.classList.add('hidden');
+  box.classList.remove('hidden');
+  box.innerHTML = (reply ? `<b>${esc(reply)}</b><br>` : '') + (a ? `${esc(SOS_STEP[a.status])}${a.press_count > 1 ? ` (pressed ${a.press_count} times)` : ''}` : '');
+  clearTimeout(sosTimer);
+  if (a && a.status !== 'resolved' && TT.user) sosTimer = setTimeout(() => showSos(null), 4000);
+}
+
+$('#sosBtn').onclick = async () => {
+  const out = await api('POST', '/me/emergency', {});  // a single press is a complete request
+  showSos(out.reply);
+};
+
 async function onSignIn(user) {
+  clearTimeout(sosTimer);
   if (!user) return;
+  showSos(null);
   const [{ participant: p }, rem, hist, reqs, chat] = await Promise.all([
     api('GET', '/me'), api('GET', '/me/reminders'), api('GET', '/me/history'), api('GET', '/me/requests'), api('GET', '/me/chat'),
   ]);
@@ -83,7 +113,10 @@ async function onSignIn(user) {
       `<label>${esc(k)}<input name="${k}" value="${esc(p[k])}" data-orig="${esc(p[k])}"></label>`).join('')
     + `<div class="wide"><button class="primary">Save</button> <span class="muted">Name, birth date and phone change by request.</span></div>`;
   $('#pHistory').innerHTML = table(hist.events, ['record_type', 'occurred_at', 'status', 'dose_label', 'response', 'visit_code', 'verbatim_text']);
-  $('#pRequests').innerHTML = reqs.requests.map(r => `<div class="muted" style="padding:3px 0">${esc(r.created_at)} · ${esc(r.subject)}: ${esc(r.body_text)}</div>`).join('');
+  $('#pRequests').innerHTML = reqs.requests.map(r => `<div style="padding:6px 0;border-top:1px solid var(--border)">
+    <div class="muted">${esc(r.created_at)} · ${esc(r.subject)}</div><div>${esc(r.body_text)}</div>
+    ${r.replies.length ? r.replies.map(x => `<div class="dose" style="margin:4px 0 0 12px"><b>Study team</b> <span class="muted">${esc(x.created_at)}</span><div>${esc(x.body_text)}</div></div>`).join('')
+      : '<div class="muted">Waiting for a reply from your study team.</div>'}</div>`).join('');
   $('#chat').innerHTML = '';
   chat.messages.forEach(m => bubble(m.body_text, m.direction));
 }

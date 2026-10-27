@@ -6,6 +6,7 @@ import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import { DataStack } from './data-stack';
@@ -23,15 +24,17 @@ export interface PortalStackProps extends StackProps {
   alertFrom: string;
   alertTo: string;
   staffCallbackUrls: string[];
-  adminCallbackUrls: string[];
   corsOrigins: string[];
   cognitoDomainPrefix: string;
+  /** Optional OpenTelemetry: OTLP/HTTP endpoint and the ADOT (or custom) Lambda layer that carries the SDK. */
+  otlpEndpoint?: string;
+  otelLayerArn?: string;
 }
 
 /**
  * portal: two Cognito user pools (staff, participants), one HTTP API with a JWT authorizer per app client,
- * and the staff / participant / admin API Lambdas. Admins are staff-pool users in the 'admin' group,
- * signing in through their own app client, so admin tokens never work on /staff and vice versa.
+ * and the staff / participant API Lambdas. Staff are their own admins: the staff API also manages staff accounts
+ * (Cognito on the staff pool), so there is no admin group, app client or API.
  */
 export class PortalStack extends Stack {
   constructor(scope: Construct, id: string, props: PortalStackProps) {
@@ -63,7 +66,7 @@ export class PortalStack extends Stack {
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });
-    for (const group of ['coordinator', 'PI', 'admin']) {
+    for (const group of ['coordinator', 'PI']) {
       new cognito.CfnUserPoolGroup(this, `Group-${group}`, { userPoolId: staffPool.userPoolId, groupName: group });
     }
     staffPool.addDomain('StaffDomain', { cognitoDomain: { domainPrefix: props.cognitoDomainPrefix } });
@@ -83,23 +86,6 @@ export class PortalStack extends Stack {
       refreshTokenValidity: Duration.hours(12),
       preventUserExistenceErrors: true,
     });
-    // Admin portal: same pool and MFA, separate client (audience) and callback URLs.
-    const adminClient = staffPool.addClient('AdminWebClient', {
-      generateSecret: false,
-      authFlows: { userSrp: true },
-      oAuth: {
-        flows: { authorizationCodeGrant: true },
-        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-        callbackUrls: props.adminCallbackUrls,
-        logoutUrls: props.adminCallbackUrls,
-      },
-      writeAttributes: new cognito.ClientAttributes(),
-      idTokenValidity: Duration.minutes(30),
-      accessTokenValidity: Duration.minutes(30),
-      refreshTokenValidity: Duration.hours(4),
-      preventUserExistenceErrors: true,
-    });
-
     // ---------------------------------------------------------------- participant pool: code on WhatsApp
     const authEnv = { WHATSAPP_PHONE_NUMBER_ID: props.whatsappPhoneNumberId, LOGIN_TEMPLATE: props.loginTemplate };
     const defineFn = new PyFunction(this, 'DefineAuthFn', {
@@ -141,13 +127,22 @@ export class PortalStack extends Stack {
     });
 
     // ---------------------------------------------------------------- API Lambdas
+    const otelEnv: Record<string, string> = props.otlpEndpoint
+      ? { OTEL_EXPORTER_OTLP_ENDPOINT: props.otlpEndpoint, DEPLOY_ENV: this.stackName }
+      : {};
+    const otelLayers = props.otelLayerArn
+      ? [lambda.LayerVersion.fromLayerVersionArn(this, 'OtelLayer', props.otelLayerArn)]
+      : [];
     const staffFn = new PyFunction(this, 'StaffApiFn', {
       handler: 'staff_api.handler.handler',
       data,
       login: 'staff_api',
+      layers: otelLayers,
       timeout: Duration.seconds(29),
       environment: {
         PARTICIPANT_POOL_ID: participantPool.userPoolId,
+        STAFF_POOL_ID: staffPool.userPoolId,
+        ...otelEnv,
         REMINDER_FUNCTION_ARN: props.scheduler.reminderFn.functionArn,
         SCHEDULE_GROUP: props.scheduler.groupName,
         SCHEDULER_ROLE_ARN: props.scheduler.schedulerRole.roleArn,
@@ -179,7 +174,9 @@ export class PortalStack extends Stack {
       login: 'participant_api',
       timeout: Duration.seconds(29), // HTTP API integration limit; the agent usually answers in a few seconds
       memorySize: 512,
+      layers: otelLayers,
       environment: {
+        ...otelEnv,
         AGENT_RUNTIME_ARN: props.agentRuntimeArn,
         ALERT_FROM: props.alertFrom,
         ALERT_TO: props.alertTo,
@@ -200,13 +197,8 @@ export class PortalStack extends Stack {
       );
     }
 
-    // Staff account management: Cognito on the staff pool only. No database login, so no participant data.
-    const adminFn = new PyFunction(this, 'AdminApiFn', {
-      handler: 'admin_api.handler.handler',
-      data,
-      environment: { STAFF_POOL_ID: staffPool.userPoolId },
-    });
-    staffPool.grant(adminFn, 'cognito-idp:ListUsers', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminCreateUser',
+    // Staff account management (/staff/accounts): Cognito on the staff pool. Staff are their own admins.
+    staffPool.grant(staffFn, 'cognito-idp:ListUsers', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminCreateUser',
       'cognito-idp:AdminUpdateUserAttributes', 'cognito-idp:AdminDisableUser', 'cognito-idp:AdminEnableUser',
       'cognito-idp:AdminUserGlobalSignOut', 'cognito-idp:AdminResetUserPassword',
       'cognito-idp:AdminListGroupsForUser', 'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup');
@@ -215,7 +207,6 @@ export class PortalStack extends Stack {
     const issuer = (pool: cognito.UserPool) => `https://cognito-idp.${this.region}.amazonaws.com/${pool.userPoolId}`;
     // ID tokens: aud = app client id, and they carry custom:participant_id / role / site_ids.
     const staffAuth = new HttpJwtAuthorizer('StaffJwt', issuer(staffPool), { jwtAudience: [staffClient.userPoolClientId] });
-    const adminAuth = new HttpJwtAuthorizer('AdminJwt', issuer(staffPool), { jwtAudience: [adminClient.userPoolClientId] });
     const participantAuth = new HttpJwtAuthorizer('ParticipantJwt', issuer(participantPool), {
       jwtAudience: [participantClient.userPoolClientId],
     });
@@ -256,10 +247,6 @@ export class PortalStack extends Stack {
       path: '/staff/{proxy+}', methods, authorizer: staffAuth,
       integration: new HttpLambdaIntegration('StaffIntegration', staffFn),
     });
-    api.addRoutes({
-      path: '/admin/{proxy+}', methods, authorizer: adminAuth,
-      integration: new HttpLambdaIntegration('AdminIntegration', adminFn),
-    });
     const participantIntegration = new HttpLambdaIntegration('ParticipantIntegration', participantFn);
     for (const p of ['/me', '/me/{proxy+}']) {
       api.addRoutes({ path: p, methods, authorizer: participantAuth, integration: participantIntegration });
@@ -268,7 +255,6 @@ export class PortalStack extends Stack {
     new CfnOutput(this, 'ApiUrl', { value: stage.url });
     new CfnOutput(this, 'StaffUserPoolId', { value: staffPool.userPoolId });
     new CfnOutput(this, 'StaffClientId', { value: staffClient.userPoolClientId });
-    new CfnOutput(this, 'AdminClientId', { value: adminClient.userPoolClientId });
     new CfnOutput(this, 'StaffLoginDomain', {
       value: `https://${props.cognitoDomainPrefix}.auth.${this.region}.amazoncognito.com`,
     });
