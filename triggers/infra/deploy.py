@@ -60,7 +60,8 @@ def statements(name, extras, queue_arn):
     s = [
         {"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
          "Resource": f"arn:aws:logs:{ARN}:log-group:/aws/lambda/{name}:*"},
-        {"Effect": "Allow", "Action": ["rds-data:ExecuteStatement", "rds-data:BeginTransaction",
+        {"Effect": "Allow", "Action": ["rds-data:ExecuteStatement", "rds-data:BatchExecuteStatement",
+                                       "rds-data:BeginTransaction",
                                        "rds-data:CommitTransaction", "rds-data:RollbackTransaction"],
          "Resource": CLUSTER_ARN},
         {"Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": MESSAGING_SECRET_ARN},
