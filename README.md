@@ -4,6 +4,16 @@ TrialTalk is a clinical-trial participant companion. Participants talk to an Ama
 
 Active branch: `main`. The staff and participant pages are hosted on AWS Amplify (branch `main`, `amplify.yml`) at https://main.dqzri9vvxpyky.amplifyapp.com (`/staff/` and `/participant/`). Everything below is synthetic data; no real participant or PHI is in the repo.
 
+## Try it live
+
+The system is deployed on AWS. The step-by-step guide for judges, with the staff and participant URLs, the WhatsApp number and a 10-minute walkthrough (enroll yourself, get a dose reminder on WhatsApp, raise an emergency, use the participant website), is in [`docs/judges.md`](docs/judges.md).
+
+- Staff portal: https://main.dqzri9vvxpyky.amplifyapp.com/staff/
+- Participant website: https://main.dqzri9vvxpyky.amplifyapp.com/participant/
+- WhatsApp: +1 609 642 3667 (or https://wa.me/16096423667)
+
+Logins are shared with the judges separately; they are not in this repository.
+
 ## Run it locally in 5 minutes (no AWS needed)
 
 The local dev server runs the real Lambda handlers, the real schema and the real row-level security against a throwaway PostgreSQL. Only the AWS clients (Data API, WhatsApp, SES, Scheduler, Cognito, AgentCore) are replaced by fakes in `coordinator-backend/tests/local_env.py`.
@@ -44,6 +54,12 @@ Stop with Ctrl+C; the database is deleted. `LC_ALL` sets a UTF-8 locale for the 
 | Amazon SES | Emergency-keyword alert email, sent by Layer 0 before any model runs | `triggers/lambdas/router/handler.py`: `emergency` |
 | Amazon SES | Missed-dose follow-up escalation to the coordinator | `triggers/lambdas/reminder/handler.py`: `follow_up` |
 | Amazon SES | Participant SOS button email to site staff | `coordinator-backend/lambdas/participant_api/handler.py` (`_alert_team`, called from the SOS and chat emergency paths) |
+
+### See them running
+
+- **Staff portal:** open a participant, then **Records** > **Communications**. Every WhatsApp message is listed with its delivery status (sent, delivered, read or failed), as reported back by AWS End User Messaging Social, together with the alert emails the router and reminder Lambdas send. **Emergency alerts** shows the alert raised by an emergency keyword on WhatsApp.
+- **CloudWatch logs (us-east-1):** `/aws/lambda/tt-ingest` shows each inbound WhatsApp event and delivery receipt; `/aws/lambda/tt-router` the replies and Layer 0 actions; `/aws/lambda/tt-reminder` the template sends. Every SES send, including the agent's escalation emails, shows in the Amazon SES console under sending statistics.
+- **Locally:** `http://127.0.0.1:8787/dev/outbox` lists every WhatsApp message and email the code tried to send.
 
 Not every call can fire without AWS and a verified WhatsApp number, which is why the local server uses fakes. The calls above are exercised with those fakes by the test suites.
 
@@ -104,14 +120,27 @@ The WhatsApp cutover is done: `tt-ingest` forwards every inbound message to `tt-
 
 ## Deploying to AWS
 
-Deploy is script-driven with an AWS profile; nothing here is needed for the local quickstart.
+Deploy is script-driven with an AWS profile; nothing here is needed for the local quickstart. The scripts name the resources of our own account, so a different account needs the values below changed first.
 
-- Database (Aurora Serverless v2 via Data API): [`db/README.md`](db/README.md)
-- Agent (AgentCore Runtime via the AgentCore CLI): [`agent/README.md`](agent/README.md)
-- Trigger Lambdas, SNS/SQS wiring, schedules, cutover: [`triggers/README.md`](triggers/README.md) (`python triggers/infra/deploy.py --profile <profile>`)
-- Staff API (HTTP API `tt-portal-api`, Lambda `tt-staff-api`) and Cognito staff pool: [`coordinator-backend/README.md`](coordinator-backend/README.md#deploy) (`python coordinator-backend/infra/deploy_portal.py --profile <profile>` deploys the staff API only). The participant API runs behind `trialtalk-api`.
-- Portal pages: Amplify builds `coordinator-frontend` from `main` (`amplify.yml`); see [`coordinator-frontend/README.md`](coordinator-frontend/README.md). The staff API must list the Amplify origin in its CORS settings (`CORS_ORIGINS` in `deploy_portal.py`).
-- WhatsApp templates and the first staff user are console steps, listed in the backend README.
+**Prerequisites (one time, in the console)**
+
+- An AWS account in `us-east-1`, the AWS CLI signed in (`aws login`), Python 3.12 with `pip install boto3 "botocore[crt]"`, and Node.js for the AgentCore CLI.
+- Amazon Bedrock model access for the Claude model named in `agent/trial_agent/root_agent.yaml`.
+- A WhatsApp Business Account linked in AWS End User Messaging Social, with its event destination set to an SNS topic named `whatsapp_topic`, and the WhatsApp templates approved (listed in the backend README).
+- An Amazon SES verified sender identity (and a verified recipient while the account is in the SES sandbox).
+- An S3 bucket holding the participant guide `agent/trial_agent/trial_docs.md`; its bucket and key are set under `trial_docs` in `root_agent.yaml`.
+- An Aurora PostgreSQL Serverless v2 cluster named `trialtalk` with the Data API enabled.
+
+**Values to change for another account:** `ACCOUNT`, `CLUSTER_ARN`, the secret ARNs, `AGENT_RUNTIME_ARN`, `ORIGINATION_PHONE_NUMBER_ID`, `WABA_ID`, `COORDINATOR_EMAIL` and `SENDER_EMAIL` at the top of `triggers/infra/deploy.py`; `FIRST_STAFF`, `PARTICIPANT_POOL_ID` and `CORS_ORIGINS` in `coordinator-backend/infra/deploy_portal.py`; the `email` and `trial_docs` settings in `agent/trial_agent/root_agent.yaml`.
+
+**Steps, in this order**
+
+1. **Database.** Run the numbered SQL files in `db/` in order with `db/run_sql.py` (`01` to `08`; `03` is synthetic seed data and `04` is the SQL tests), using the cluster's master secret. Replace the `CHANGE_ME` passwords from `02_roles_rls.sql` and store each login in Secrets Manager as `trialtalk/db/<login>`. Details: [`db/README.md`](db/README.md).
+2. **Agent.** From `agent/`, run `agentcore deploy` (AgentCore Runtime via the AgentCore CLI) and note the runtime ARN for `AGENT_RUNTIME_ARN`. Details: [`agent/README.md`](agent/README.md).
+3. **Trigger Lambdas.** `python triggers/infra/deploy.py --profile <profile>` creates `tt-ingest`, `tt-router`, `tt-reminder`, `tt-reconcile`, the SNS subscription, the SQS FIFO queue and the schedules. Forwarding to the router stays off until you run it once with `--cutover` (after removing any older handler subscribed to the topic). Details: [`triggers/README.md`](triggers/README.md).
+4. **Staff API.** `python coordinator-backend/infra/deploy_portal.py --profile <profile>` creates the `tt-staff` Cognito pool, `tt-staff-api` and the HTTP API `tt-portal-api`. The participant API (`coordinator-backend/lambdas/participant_api`) is not deployed by these scripts; the local server runs it for evaluation. Details: [`coordinator-backend/README.md`](coordinator-backend/README.md#deploy).
+5. **Portal pages.** Connect an AWS Amplify app to this repository's `main` branch; it builds `coordinator-frontend` with `amplify.yml`. Add the Amplify address to `CORS_ORIGINS` in `deploy_portal.py` and re-run step 4. Details: [`coordinator-frontend/README.md`](coordinator-frontend/README.md).
+6. **Check it works.** Message the WhatsApp number from a phone; the reply comes from `tt-router` and the agent. The first staff user and the WhatsApp templates are console steps, listed in the backend README.
 
 ## Tests
 
