@@ -30,7 +30,7 @@ _client = None
 def client():
     global _client
     if _client is None:
-        _client = boto3.client("rds-data")
+        _client = boto3.client("rds-data", region_name=os.environ.get("DB_REGION") or None)
     return _client
 
 

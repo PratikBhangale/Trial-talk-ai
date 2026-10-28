@@ -8,7 +8,7 @@ const app = new App();
 const ctx = (key: string): string => app.node.tryGetContext(key) ?? '';
 const list = (key: string): string[] => ctx(key).split(',').map((s) => s.trim()).filter(Boolean);
 
-// Dev runs in us-east-2 next to the deployed agent; the target design is us-east-1 (see CLAUDE.md).
+// us-east-1, next to the Aurora cluster, the agent runtime and the WhatsApp account.
 const env = { account: ctx('account'), region: ctx('region') };
 
 const data = new DataStack(app, 'TrialTalk-Data', { env });

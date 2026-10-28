@@ -33,9 +33,10 @@ export class PyFunction extends lambda.Function {
       environment: {
         ...(login
           ? {
-              DB_CLUSTER_ARN: data.cluster.clusterArn,
+              DB_CLUSTER_ARN: data.clusterArn,
               DB_SECRET_ARN: data.loginSecrets[login].secretArn,
               DB_NAME,
+              DB_REGION: data.dbRegion,
             }
           : {}),
         ...props.environment,
@@ -46,7 +47,7 @@ export class PyFunction extends lambda.Function {
       }),
     });
     if (login) {
-      // Not cluster.grantDataApiAccess(): that also grants the master secret, which would bypass RLS.
+      // Only this login's secret, never the master secret, which would bypass RLS.
       this.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
@@ -56,7 +57,7 @@ export class PyFunction extends lambda.Function {
             'rds-data:CommitTransaction',
             'rds-data:RollbackTransaction',
           ],
-          resources: [data.cluster.clusterArn],
+          resources: [data.clusterArn],
         }),
       );
       this.addToRolePolicy(

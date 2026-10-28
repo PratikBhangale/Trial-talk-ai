@@ -137,8 +137,8 @@ Each change prints an `audit` line to CloudWatch.
 
    Hard deletion is revoked from every role in the schema.
 2. **Web is a new channel.** Website requests and staff replies to them are logged with channel `'web'` in `communications`, and `participant_role` can read its own web rows. The participant website has no chat; participants talk to the agent on WhatsApp.
-3. **DynamoDB bridge.** Aurora is the source of truth, but the deployed agent (`store.get_profile`) and `whatsapp/handler.py` still read DynamoDB `trial_agent`. To keep them working, `common/legacy_mirror.py` copies the profile, dose times and phone lookup there after every staff change. Set context `legacyTable` to `""` to turn this off once the agent reads Aurora. Nothing in the DynamoDB path was deleted.
-4. **Region.** The stacks default to `us-east-2`, next to the deployed agent runtime (`cdk.json` → `region`). The target `us-east-1` is a context change plus redeploying the agent there.
+3. **DynamoDB bridge.** Aurora is the source of truth, but the deployed agent (`store.get_profile`) and `whatsapp/handler.py` still read DynamoDB `trial_agent`. To keep them working, `common/legacy_mirror.py` copies the profile, dose times and phone lookup there after every staff change. Context `legacyTable` turns it on; it is `""` (off) because account `180026596905` has no `trial_agent` table, and the mirror writes inside the staff transaction, so a missing table would fail every staff change. Nothing in the DynamoDB path was deleted.
+4. **Account and region.** Account `180026596905`, `us-east-1`, next to the Aurora cluster, the agent runtime and the WhatsApp account (`cdk.json` → `account`, `region`). A cluster in another region also works: the Lambdas call the Data API in `DB_REGION`, taken from `dbClusterArn`.
 5. **Small schema additions**, all listed at the top of `schema.sql`:
    - a `P-1001…` id sequence
    - RLS policies for `messaging_role` and `agent_role`. The plan turns on RLS but defines no policies for these roles, so without this they would see zero rows
@@ -197,8 +197,9 @@ Everything below API Gateway is real code against real RLS. Stop the server with
 
 ## Deploy
 
-1. Check AWS auth: `aws sts get-caller-identity` (account `461729033902`).
+1. Check AWS auth: `aws sts get-caller-identity` (account `180026596905`).
 2. Set the context in `infra/cdk.json`:
+   - `dbClusterArn` and `dbLoginSecretArns`: the existing Aurora cluster (`trialtalk`, us-east-1) and the full ARNs of its login secrets, as `{"staff_api": "<trialtalk/db/tt_portal ARN>", "participant_api": "<tt_participant>", "messaging_api": "<tt_messaging>", "agent_api": "<tt_agent>"}`. The stacks don't create or migrate the database; see `db/README.md`
    - `whatsappPhoneNumberId` (the `phone-number-id-…` ARN of the WhatsApp number)
    - `alertFrom` (an SES-verified sender) and `alertTo`, the emergency email recipients per site as JSON: `{"RIVERSIDE": "coordinator@riverside-clinic.org", "LAKEVIEW": "coordinator@lakeview-health.org"}`. An alert only emails its own site. A `"*"` key emails every site's alerts to those addresses; use it only if one team covers all sites
    - `staffCallbackUrls` and `corsOrigins` for the portal URLs
@@ -207,11 +208,11 @@ Everything below API Gateway is real code against real RLS. Stop the server with
 ```bash
 cd backend/infra
 npm install
-npx cdk bootstrap aws://461729033902/us-east-2   # once per account/region
+npx cdk bootstrap aws://180026596905/us-east-1   # once per account/region (already done)
 npx cdk deploy --all
 ```
 
-The first deploy creates Aurora and runs the migration (several minutes). Outputs include the API URL and both user pools' ids and client ids.
+The database must already have `db/01_schema.sql`, `db/02_roles_rls.sql` and `tests/pending_db_additions.sql` applied (with `db/run_sql.py`). Outputs include the API URL and both user pools' ids and client ids.
 
 ### Console steps (the plan leaves these to the console)
 
