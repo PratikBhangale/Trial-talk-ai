@@ -627,6 +627,9 @@ button.kpi:focus-visible { outline-offset: -2px; border-radius: 0; }
 .back-link:hover { color: var(--text); background: var(--surface-3); }
 .back-link .icon { width: 16px; height: 16px; }
 [data-page="trial"] .page-head .meta { margin-top: 10px; }
+/* Five figures: narrower tiles keep them on one row on a laptop instead of four and a stray fifth. */
+.trial-kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+@container main (max-width: 520px) { .trial-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }   /* keep the phone layout */
 [data-page="trial"] .panel-head > .tag { margin-inline-start: auto; }
 [data-page="trial"] .panel-head > .tag + .actions { margin-inline-start: 0; }
 .engage { display: grid; gap: 16px; }

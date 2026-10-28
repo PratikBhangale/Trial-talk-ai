@@ -494,12 +494,15 @@ async function loadTrial(id) {
   $('#trialMeta').innerHTML = [st.phase, st.condition, st.study_id || id].filter(Boolean).map(v => `<span class="tag">${esc(v)}</span>`).join('');
   $('#trialDesc').textContent = st.description || '';
   const crit = o.critical_list || [], open = crit.filter(a => a.status !== 'resolved').length;
-  body.innerHTML = `<div class="kpis">
+  body.innerHTML = `<div class="kpis trial-kpis">
       <div class="kpi"><span>Patients</span><b>${nf(t.patients)}</b><small>Withdrawn and screen-failed excluded</small></div>
       <div class="kpi"><span>Engaged on WhatsApp (14&nbsp;d)</span><b>${t.patients ? pctText(t.engaged_pct) : '—'}</b><small>Messaged via WhatsApp in the last 14 days</small></div>
       <div class="kpi"><span>Dose adherence (14&nbsp;d)</span><b>${pctText(t.adherence_pct)}</b><small>${t.adherence_pct === null ? 'No doses due in 14 days' : 'Taken of due, last 14 days'}</small></div>
-      <div class="kpi"><span>Symptoms (all time)</span><b>${nf(t.symptoms)}</b><small>${nf(t.agent_handled)} handled by the agent, ${nf(Math.max(0, t.symptoms - t.agent_handled))} urgent</small></div>
-      <div class="kpi ${+t.critical ? 'tone-bad' : ''}"><span>Emergency alerts (all time)</span><b>${nf(t.critical)}</b><small>${open ? `${nf(open)} open among the newest ${nf(crit.length)}` : crit.length ? `None of the newest ${nf(crit.length)} open` : 'None raised'}</small></div>
+      <div class="kpi"><span>Symptoms (all&nbsp;time)</span><b>${nf(t.symptoms)}</b><small>${nf(t.agent_handled)} handled by the agent, ${nf(Math.max(0, t.symptoms - t.agent_handled))} urgent</small></div>
+      <div class="kpi ${+t.critical ? 'tone-bad' : ''}"><span>Emergency alerts (all&nbsp;time)</span><b>${nf(t.critical)}</b><small>${
+        open === crit.length && open ? plural(open, 'open alert')
+        : open ? `${nf(open)} of the newest ${nf(crit.length)} still open`
+        : crit.length === 1 ? 'None open' : crit.length ? `None of the newest ${nf(crit.length)} open` : 'None raised'}</small></div>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>Symptoms per day</h2><span class="tag">Last 14 days · UTC</span></div>
@@ -551,7 +554,7 @@ function engagementSplit({ engaged, not_engaging: quiet }) {
 // ------------------------------------------------------------ ask: questions about the trials, answered by the agent
 // POST /staff/ask { question, history } -> { answer, tool_calls: [{ tool, summary }], usage }. One request per question,
 // never polled. The last ASK_TURNS messages go along as history so a follow-up ("and at Lakeview?") has context.
-const ASK_TURNS = 10;
+const ASK_TURNS = 10, ASK_HISTORY_TEXT = 8000;   // ask.py: MAX_HISTORY messages, MAX_HISTORY_TEXT characters each
 Widgets.ask = { history: [], busy: false };
 
 function askBubble(text, who, extra = '') {
@@ -610,7 +613,8 @@ async function sendAsk(text) {
     const answer = String(out.answer || '').trim() || 'I could not find an answer to that in your trial data.';
     askBubble(answer, 'assistant');
     $('#askLog').insertAdjacentHTML('beforeend', askMeta(out));
-    Widgets.ask.history.push({ role: 'user', text: question }, { role: 'assistant', text: answer });
+    // Stored capped at the API's per-message limit: one long answer must not make every later question a 400.
+    Widgets.ask.history.push({ role: 'user', text: question.slice(0, ASK_HISTORY_TEXT) }, { role: 'assistant', text: answer.slice(0, ASK_HISTORY_TEXT) });
     Widgets.ask.history = Widgets.ask.history.slice(-ASK_TURNS);
   } catch (e) {
     stopOrb(); wait.remove();
