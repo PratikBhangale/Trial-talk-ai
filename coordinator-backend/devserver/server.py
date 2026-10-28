@@ -91,6 +91,18 @@ class EchoAgent(FakeAgentCore):
                 "to talk to the deployed trial_agent.")
 
 
+def _init_without_request_sink(real_init):
+    """telemetry.init that builds the tracer with TELEMETRY_DB_SINK=0 (no per-request DB exporter) and then removes
+    the flag again, so persist_spans keeps writing."""
+    def init(**kw):
+        os.environ["TELEMETRY_DB_SINK"] = "0"
+        try:
+            return real_init(**kw)
+        finally:
+            os.environ.pop("TELEMETRY_DB_SINK", None)
+    return init
+
+
 def wire(real_agent: bool) -> None:
     """Point every Lambda module at the fakes, the way tests/conftest.py does with monkeypatch."""
     fakes.rds, fakes.scheduler = FakeRdsData(pg.port), FakeScheduler()
@@ -104,14 +116,16 @@ def wire(real_agent: bool) -> None:
     staff.lambda_client = lambda: types.SimpleNamespace(invoke=_invoke_reminder)
     accounts.cognito = lambda: fakes.staff_pool
     accounts.STAFF_POOL_ID = "local-staff-pool"
-    # Web chat stores the agent's returned spans through telemetry.persist_spans (its own Data API client). Point it at
-    # the local database as the staff login (the only one allowed that INSERT ... ON CONFLICT (span_id); see
-    # db/05_telemetry.sql grants). The per-request span sink stays
-    # off so the staff dashboard's own polling doesn't bury the demo traces; TELEMETRY_DB_SINK=1 turns it on.
+    # Web chat stores the agent's returned spans through telemetry.persist_spans (its own Data API client), so point
+    # that client at the local database as the participant login, like the deployed Lambda. The per-request span
+    # sink, which would let the staff dashboard's own polling bury the demo traces, stays off unless the caller sets
+    # TELEMETRY_DB_SINK=1. It is turned off only while the tracer is built (see _init_without_request_sink), never
+    # in the environment: persist_spans also honors TELEMETRY_DB_SINK=0 and would stop storing the agent's spans.
     os.environ.setdefault("DB_CLUSTER_ARN", "local-cluster")
-    os.environ.setdefault("DB_SECRET_ARN", "staff")
-    os.environ.setdefault("TELEMETRY_DB_SINK", "0")
+    os.environ.setdefault("DB_SECRET_ARN", "participant")
     telemetry._rds = fakes.rds
+    if os.environ.get("TELEMETRY_DB_SINK") is None:
+        telemetry.init = _init_without_request_sink(telemetry.init)  # reset() re-inits through this too
     telemetry.init()
     participant.ses = lambda: types.SimpleNamespace(send_email=lambda **kw: fakes.emails.append(kw))
     participant.ALERT_FROM = "alerts@example.org"

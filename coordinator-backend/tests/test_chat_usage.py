@@ -22,10 +22,8 @@ def span_sink(aws, monkeypatch):
     """Route telemetry.persist_spans (its own Data API client, as in the Lambda) to the local database."""
     from common import telemetry
     monkeypatch.setenv("DB_CLUSTER_ARN", "arn:local-cluster")
-    # tt_portal: the only login that can run the sink's INSERT ... ON CONFLICT (span_id) (db/05_telemetry.sql gives
-    # messaging_role INSERT without SELECT, and participant_role nothing; see the task report).
-    monkeypatch.setenv("DB_SECRET_ARN", "staff")
-    monkeypatch.setenv("TELEMETRY_DB_SINK", "0")
+    monkeypatch.setenv("DB_SECRET_ARN", "participant")  # the login the deployed participant_api writes spans as
+    monkeypatch.delenv("TELEMETRY_DB_SINK", raising=False)  # persist_spans is skipped when it is "0"
     monkeypatch.setattr(telemetry, "_rds", aws.rds)
     return aws
 
@@ -60,6 +58,16 @@ def test_chat_records_usage_and_spans(call_participant, call_staff, span_sink, c
     assert len(spans) == len(sent["trace"]["spans"]) >= 2
     assert {s[1] for s in spans} == {"trial-agent"}
     assert "agent.invoke" in {s[2] for s in spans} and "tool.search_trial_docs" in {s[2] for s in spans}
+
+
+def test_db_sink_flag_off_stores_no_agent_spans_but_chat_works(call_participant, call_staff, span_sink, clean_spans,
+                                                                monkeypatch):
+    monkeypatch.setenv("TELEMETRY_DB_SINK", "0")
+    pid = enroll(call_staff)
+    status, body = call_participant(pid, "POST", "/me/chat", {"text": "hello"})
+    assert status == 200 and body["reply"] == "echo: hello"
+    assert clean_spans.execute("SELECT count(*) FROM trial.telemetry_spans").fetchone()[0] == 0
+    assert len(outbound(clean_spans, pid)) == 1
 
 
 def test_chat_passes_traceparent_to_the_agent(call_participant, call_staff, span_sink, monkeypatch):
