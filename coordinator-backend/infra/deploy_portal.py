@@ -8,8 +8,9 @@ Resources (all named tt-*):
                           tt-reminder for "Send now"
   HTTP API tt-portal-api: GET/POST/PATCH/DELETE /staff/{proxy+}, Cognito JWT authorizer (ID token)
 
-The code under coordinator-backend/lambdas is deployed unchanged. Not deployed yet: the participant pool and
-participant_api, so POST /staff/participants (which also creates the participant's website login) fails.
+The code under coordinator-backend/lambdas is deployed unchanged. POST /staff/participants also creates the
+participant's website login in PARTICIPANT_POOL_ID, the pool the participant sign-in page uses (from the CDK stack
+TrialTalk-Portal, not created here). Not deployed yet: participant_api.
 Needs: pip install boto3 "botocore[crt]"
 """
 import argparse
@@ -38,6 +39,9 @@ APPROVED_TEMPLATES = "dose_reminder_v2,visit_reminder_v1,daily_checkin_v1"
 FIRST_STAFF = {"email": "divya.shah7999@gmail.com", "name": "Divya Shah", "group": "PI",
                "site_ids": "RIVERSIDE,LAKEVIEW", "study_ids": "KOA-301"}
 TAGS = {"project": "trialtalk"}
+# trialtalk-participants: where participants sign in (CONFIG.clients.participant in coordinator-frontend/common.js).
+# Not tt-participant, which the sign-in page doesn't use.
+PARTICIPANT_POOL_ID = "us-east-1_FVAiqMdUk"
 # The staff API reads trial.telemetry_spans; it does not store its own request spans. The dashboard polls it every
 # few seconds (alerts, usage, observability), so storing them would bury the pipeline traces the trigger Lambdas
 # write (they keep TELEMETRY_DB_SINK=1). Explicitly "0": with DB_CLUSTER_ARN + DB_SECRET_ARN set, the sink is on
@@ -60,7 +64,7 @@ ASK_BEDROCK_STATEMENT = {
 def staff_env(pool_id: str, sched_role_arn: str) -> dict:
     """Environment of tt-staff-api."""
     return {"DB_CLUSTER_ARN": CLUSTER_ARN, "DB_SECRET_ARN": PORTAL_SECRET_ARN, "DB_NAME": "trialtalk",
-            "STAFF_POOL_ID": pool_id, "PARTICIPANT_POOL_ID": "",
+            "STAFF_POOL_ID": pool_id, "PARTICIPANT_POOL_ID": PARTICIPANT_POOL_ID,
             "SCHEDULE_GROUP": GROUP, "REMINDER_FUNCTION_ARN": fn_arn("tt-reminder"),
             "SCHEDULER_ROLE_ARN": sched_role_arn, "APPROVED_TEMPLATES": APPROVED_TEMPLATES, "LEGACY_TABLE": "",
             "ASK_MODEL_ID": ASK_MODEL_ID, **STAFF_TELEMETRY_ENV}
@@ -260,6 +264,10 @@ def main():
             "cognito-idp:AdminUserGlobalSignOut", "cognito-idp:AdminResetUserPassword",
             "cognito-idp:AdminListGroupsForUser", "cognito-idp:AdminAddUserToGroup",
             "cognito-idp:AdminRemoveUserFromGroup"]},
+        # /staff/participants: create the website login, keep its phone number in step, disable it on withdrawal
+        {"Effect": "Allow", "Resource": f"arn:aws:cognito-idp:{ARN}:userpool/{PARTICIPANT_POOL_ID}", "Action": [
+            "cognito-idp:AdminCreateUser", "cognito-idp:AdminSetUserPassword",
+            "cognito-idp:AdminUpdateUserAttributes", "cognito-idp:AdminDisableUser"]},
         # /staff/ask: Bedrock Converse for the read-only "Ask the clinic" tool loop
         ASK_BEDROCK_STATEMENT,
     ]}
