@@ -4,13 +4,13 @@
       "resources": {
         "runtimes": {
           "trial_agent": {
-            "runtimeId": "ContinuumAI_trial_agent-M50yJMBk8H",
-            "runtimeArn": "arn:aws:bedrock-agentcore:us-east-2:461729033902:runtime/ContinuumAI_trial_agent-M50yJMBk8H",
-            "roleArn": "arn:aws:iam::461729033902:role/AgentCore-ContinuumAI-def-ApplicationAgentTrialAgen-moi3vgezrc5g"
+            "runtimeId": "ContinuumAI_trial_agent-UL2ODbF7Ie",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:180026596905:runtime/ContinuumAI_trial_agent-UL2ODbF7Ie",
+            "roleArn": "arn:aws:iam::180026596905:role/AgentCore-ContinuumAI-def-ApplicationAgentTrialAgen-mVp9RDY9si3s"
           }
         },
         "stackName": "AgentCore-ContinuumAI-default",
-        "deployHash": "a50503d7d3140647"
+        "deployHash": "befa428b8ddaa3b4"
       }
     }
   }
