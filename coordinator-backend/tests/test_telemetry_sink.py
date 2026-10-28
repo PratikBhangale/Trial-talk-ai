@@ -7,9 +7,19 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("opentelemetry.sdk")
+from common import telemetry  # noqa: E402  (imports fine without the SDK: telemetry just becomes a no-op)
 
-from common import telemetry  # noqa: E402
+
+def _sdk_present() -> bool:
+    try:
+        import importlib.util
+        return importlib.util.find_spec("opentelemetry.sdk") is not None
+    except ImportError:
+        return False
+
+
+# Per-test, not module-level: the copies-identical drift guard and the persist/filter tests must run without the SDK.
+needs_sdk = pytest.mark.skipif(not _sdk_present(), reason="OpenTelemetry SDK not installed")
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,6 +67,7 @@ def value(p):
     return next(iter(p["value"].values()))
 
 
+@needs_sdk
 def test_spans_flushed_to_db(rds):
     with telemetry.span("db SELECT", **{"db.system": "postgresql", "gen_ai.usage.input_tokens": 12}) as s:
         trace_id = f"{s.get_span_context().trace_id:032x}"
@@ -74,6 +85,31 @@ def test_spans_flushed_to_db(rds):
     assert len(value(row["start_ts"])) == len("2026-01-01 00:00:00.000")
 
 
+def test_allowlist_drops_non_finite_floats():
+    out = telemetry._filter_attrs({"trialtalk.kb.top_score": float("nan"), "trialtalk.x": float("inf"),
+                                   "trialtalk.ok": 0.5})
+    assert out == {"trialtalk.ok": 0.5}
+
+
+def test_nan_attr_does_not_poison_batch(rds):
+    good = {"span_id": "1" * 16, "name": "a", "start": "2026-05-01T10:00:00+00:00", "duration_ms": 1, "status": "OK",
+            "kind": "INTERNAL", "attributes": {"trialtalk.kb.top_score": float("nan"), "trialtalk.n": 1}}
+    telemetry.persist_spans([good, {**good, "span_id": "2" * 16}], "svc", "e" * 32)
+    got = rows(rds)
+    assert len(got) == 2
+    assert json.loads(value(got[0]["attrs"])) == {"trialtalk.n": 1}
+
+
+def test_rds_client_has_short_timeouts(monkeypatch):
+    seen = {}
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(
+        client=lambda name, **kw: seen.update(kw) or FakeRds()))
+    monkeypatch.setattr(telemetry, "_rds", None)
+    telemetry._rds_client()
+    cfg = seen["config"]
+    assert cfg.connect_timeout <= 2 and cfg.read_timeout <= 3 and cfg.retries["max_attempts"] == 1
+
+
 def test_allowlist_drops_phi_and_long_values():
     out = telemetry._filter_attrs({
         "body_text": "hello", "phone": "+15555550100", "gen_ai.usage.input_tokens": 7,
@@ -82,6 +118,7 @@ def test_allowlist_drops_phi_and_long_values():
     assert out == {"gen_ai.usage.input_tokens": 7, "http.request.method": "GET", "trialtalk.note": "y" * 200}
 
 
+@needs_sdk
 def test_db_failure_never_raises(rds):
     rds.fail = True
     with telemetry.span("work"):
@@ -118,6 +155,7 @@ def test_persist_spans_noop_without_db_env(monkeypatch):
     telemetry.persist_spans([{"span_id": "1" * 16, "name": "x"}], "svc", "d" * 32)  # must not raise
 
 
+@needs_sdk
 def test_db_sink_can_be_disabled(rds, monkeypatch):
     monkeypatch.setenv("TELEMETRY_DB_SINK", "0")
     telemetry.init(force=True)
@@ -127,6 +165,7 @@ def test_db_sink_can_be_disabled(rds, monkeypatch):
     assert rds.calls == []
 
 
+@needs_sdk
 def test_traceparent_roundtrip():
     telemetry.init(force=True)
     assert telemetry.traceparent() is None  # no active span

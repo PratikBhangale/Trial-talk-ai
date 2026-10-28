@@ -2,7 +2,7 @@
 """OpenTelemetry for the Lambdas: one span per request, child spans for database and outbound calls, request metrics.
 
 Uses the real OpenTelemetry SDK when it is installed (the dev server's venv, or a Lambda layer) and does nothing
-when it is not, so the handlers never depend on it. Two sinks:
+when it is not, so the handlers never depend on it. Three sinks:
 
   * an in-process ring buffer + metric reader, read by GET /staff/observability (the staff portal widget);
   * an OTLP/HTTP exporter, added when OTEL_EXPORTER_OTLP_ENDPOINT is set and the OTLP package is importable;
@@ -17,6 +17,7 @@ no bodies. Keep it that way when adding spans.
 """
 
 import json
+import math
 import os
 import threading
 import time
@@ -63,7 +64,9 @@ def _warn(what: str, exc: Exception) -> None:
 def _ok_value(v) -> bool:
     if isinstance(v, str):
         return len(v) <= MAX_ATTR_STRING
-    return isinstance(v, (bool, int, float))
+    if isinstance(v, float):
+        return math.isfinite(v)  # NaN/Infinity make json.dumps emit JSON the Data API rejects (and poison the batch)
+    return isinstance(v, (bool, int))
 
 
 def _filter_attrs(attrs: dict) -> dict:
@@ -88,7 +91,12 @@ def _rds_client():
     global _rds
     if _rds is None:
         import boto3
-        _rds = boto3.client("rds-data")
+        try:  # short timeouts, one attempt: a slow or resuming Aurora must not hold the request
+            from botocore.config import Config
+            cfg = {"config": Config(connect_timeout=1, read_timeout=2, retries={"max_attempts": 1})}
+        except ImportError:
+            cfg = {}
+        _rds = boto3.client("rds-data", **cfg)
     return _rds
 
 
@@ -114,7 +122,7 @@ def _param_set(row: dict) -> list:
         {"name": "duration_ms", "value": {"doubleValue": float(row.get("duration_ms") or 0)}},
         _str("status", row.get("status") or "UNSET"),
         {"name": "attrs", "typeHint": "JSON",
-         "value": {"stringValue": json.dumps(_filter_attrs(row.get("attributes") or {}), default=str)}},
+         "value": {"stringValue": json.dumps(_filter_attrs(row.get("attributes") or {}), default=str, allow_nan=False)}},
     ]
 
 
@@ -271,7 +279,7 @@ def flush() -> None:
     if not AVAILABLE or not _state:
         return
     try:
-        _state["tracer_provider"].force_flush(5000)
+        _state["tracer_provider"].force_flush(2000)  # telemetry loses data before it slows a reply
     except Exception as exc:
         _warn("flush", exc)
 
