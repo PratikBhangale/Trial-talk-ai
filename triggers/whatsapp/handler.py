@@ -5,9 +5,15 @@ import hashlib
 import json
 import os
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import boto3
+
+try:
+    import telemetry   # triggers/lambdas/common/telemetry.py, when bundled into this zip; tracing is off without it
+except ImportError:
+    telemetry = None
 
 RUNTIME_ARN = os.environ["RUNTIME_ARN"]
 DEMO_PARTICIPANT_ID = os.environ.get("DEMO_PARTICIPANT_ID", "")   # empty = demo mode off
@@ -147,12 +153,68 @@ def ask_agent(pid: str, text: str, conversation_key: str | None = None) -> str:
     payload = {"participant_id": pid, "text": text}
     if conversation_key:
         payload["conversation_key"] = conversation_key
-    resp = agentcore.invoke_agent_runtime(
-        agentRuntimeArn=RUNTIME_ARN,
-        runtimeSessionId=f"whatsapp-session-{session_owner}".ljust(33, "0"),  # must be 33+ characters
-        payload=json.dumps(payload).encode(),
-    )
-    return json.loads(resp["response"].read()).get("reply") or ERROR_REPLY
+    with _span("agent.call", "CLIENT") as span:
+        tp = telemetry.traceparent() if telemetry else None   # the agent's spans join this trace
+        if tp:
+            payload["traceparent"] = tp
+        resp = agentcore.invoke_agent_runtime(
+            agentRuntimeArn=RUNTIME_ARN,
+            runtimeSessionId=f"whatsapp-session-{session_owner}".ljust(33, "0"),  # must be 33+ characters
+            payload=json.dumps(payload).encode(),
+        )
+        body = json.loads(resp["response"].read())
+        record_agent_usage(body, span)
+    return body.get("reply") or ERROR_REPLY
+
+
+# ---------- telemetry (never changes a reply: every failure here is swallowed) ----------
+
+_agent_traces = []   # traces the agent returned; persisted after the replies are sent, not before
+
+
+def record_agent_usage(body, span) -> None:
+    """Token counts from the agent's response (absent on old agents and error replies) onto the agent.call span;
+    the agent's own spans are queued for persist_agent_traces()."""
+    try:
+        usage = body.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        for key in ("input_tokens", "output_tokens"):
+            v = usage.get(key)
+            if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+                span.set_attribute(f"gen_ai.usage.{key}", v)
+        if isinstance(usage.get("model"), str):
+            span.set_attribute("gen_ai.request.model", usage["model"])
+        trace = body.get("trace")
+        if telemetry and isinstance(trace, dict) and trace.get("trace_id") and trace.get("spans"):
+            _agent_traces.append(trace)
+    except Exception as e:
+        print(f"Agent usage not recorded: {type(e).__name__}")
+
+
+def persist_agent_traces() -> None:
+    while _agent_traces:
+        trace = _agent_traces.pop(0)
+        telemetry.persist_spans(trace["spans"], service="trial-agent", trace_id=trace["trace_id"])
+
+
+class _NoSpan:
+    def set_attribute(self, *a, **kw):
+        pass
+
+
+@contextmanager
+def _span(name, kind, **attrs):
+    """A telemetry span with an OTel span kind (telemetry.span() takes none, and that module is kept
+    byte-identical with coordinator-backend's copy). A no-op when telemetry or its SDK is missing."""
+    attrs = {k: v for k, v in attrs.items() if v is not None}
+    tracer = telemetry._state.get("tracer") if telemetry and telemetry.init() else None
+    if tracer is None:
+        yield _NoSpan()
+        return
+    from opentelemetry.trace import SpanKind
+    with tracer.start_as_current_span(name, kind=SpanKind[kind], attributes=attrs or None,
+                                      record_exception=True, set_status_on_exception=True) as s:
+        yield s
 
 
 # ---------- 5. reply on WhatsApp ----------
@@ -174,44 +236,50 @@ def send_whatsapp(origination_id: str, to: str, text: str) -> None:
 # ---------- the Lambda entry point ----------
 
 def handler(event, context):
-    for origination_id, sender, message in incoming_messages(event):
-        pid = find_participant(sender)
-        conversation_key = None
+    try:
+        for origination_id, sender, message in incoming_messages(event):
+            with _span("whatsapp.legacy", "CONSUMER", **{"trialtalk.msg_type": message.get("type")}):
+                pid = find_participant(sender)
+                conversation_key = None
 
-        if not pid:
-            if not DEMO_PARTICIPANT_ID:
-                print(f"Message from unknown number ending {sender[-4:]}")
-                send_whatsapp(origination_id, sender, UNKNOWN_SENDER_REPLY)
-                continue
-            # Demo mode: shared synthetic profile, private memory per tester (hashed number, never stored raw)
-            pid = DEMO_PARTICIPANT_ID
-            conversation_key = "demo-" + hashlib.sha256(sender.encode()).hexdigest()[:12]
-            print(f"Demo user {conversation_key}")
+                if not pid:
+                    if not DEMO_PARTICIPANT_ID:
+                        print(f"Message from unknown number ending {sender[-4:]}")
+                        send_whatsapp(origination_id, sender, UNKNOWN_SENDER_REPLY)
+                        continue
+                    # Demo mode: shared synthetic profile, private memory per tester (hashed number, never stored raw)
+                    pid = DEMO_PARTICIPANT_ID
+                    conversation_key = "demo-" + hashlib.sha256(sender.encode()).hexdigest()[:12]
+                    print(f"Demo user {conversation_key}")
 
-        # Reminder button taps: recorded directly, no agent.
-        # Template buttons arrive as "button"; interactive-message buttons arrive as "interactive".
-        button_payload = None
-        if message.get("type") == "button":
-            button_payload = message.get("button", {}).get("payload", "")
-        elif message.get("type") == "interactive" and message.get("interactive", {}).get("type") == "button_reply":
-            button_payload = message["interactive"]["button_reply"].get("id", "")
+                # Reminder button taps: recorded directly, no agent.
+                # Template buttons arrive as "button"; interactive-message buttons arrive as "interactive".
+                button_payload = None
+                if message.get("type") == "button":
+                    button_payload = message.get("button", {}).get("payload", "")
+                elif message.get("type") == "interactive" and message.get("interactive", {}).get("type") == "button_reply":
+                    button_payload = message["interactive"]["button_reply"].get("id", "")
 
-        if button_payload is not None:
-            reply = handle_button(pid, button_payload)
-            send_whatsapp(origination_id, sender, reply or "Thanks, your response was received.")
-            continue
+                if button_payload is not None:
+                    reply = handle_button(pid, button_payload)
+                    send_whatsapp(origination_id, sender, reply or "Thanks, your response was received.")
+                    continue
 
-        if message.get("type") != "text":
-            send_whatsapp(origination_id, sender, NOT_TEXT_REPLY)
-            continue
+                if message.get("type") != "text":
+                    send_whatsapp(origination_id, sender, NOT_TEXT_REPLY)
+                    continue
 
-        text = message["text"]["body"].strip()[:1000]
-        try:
-            reply = ask_agent(pid, text, conversation_key)
-        except Exception as e:
-            print(f"Agent call failed for {pid}: {e}")
-            reply = ERROR_REPLY
+                text = message["text"]["body"].strip()[:1000]
+                try:
+                    reply = ask_agent(pid, text, conversation_key)
+                except Exception as e:
+                    print(f"Agent call failed for {pid}: {e}")
+                    reply = ERROR_REPLY
 
-        send_whatsapp(origination_id, sender, reply)
+                send_whatsapp(origination_id, sender, reply)
 
-    return {"ok": True}
+        return {"ok": True}
+    finally:
+        persist_agent_traces()
+        if telemetry:
+            telemetry.flush()

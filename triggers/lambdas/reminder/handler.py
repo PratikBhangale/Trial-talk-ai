@@ -23,6 +23,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import schedules
+import telemetry
 import wa
 from db import Tx
 
@@ -36,13 +37,32 @@ HIDDEN_BUTTONS = {"remind me in 30 min"}
 
 
 def handler(event, context):
-    mode = event.get("mode", "send")
-    if mode == "follow_up":
-        result = follow_up(event)
-    else:
-        result = send(event["reminder_id"], snooze=mode == "snooze", manual=bool(event.get("manual")))
-    print(json.dumps({**result, "requested_by": event.get("requested_by")}))
-    return result
+    try:
+        mode = event.get("mode", "send")
+        with telemetry.span("reminder.send", **{"trialtalk.reminder.mode": str(mode)}) as span:
+            if mode == "follow_up":
+                result = follow_up(event)
+            else:
+                result = send(event["reminder_id"], snooze=mode == "snooze", manual=bool(event.get("manual")))
+            span.set_attribute("trialtalk.reminder.result", str(result.get("result")))
+        print(json.dumps({**result, "requested_by": event.get("requested_by")}))
+        return result
+    finally:
+        telemetry.flush()
+
+
+def _tag(**attrs):
+    """Set attributes on the active span (reminder.send). No-op without telemetry; never raises."""
+    if not telemetry.enabled():
+        return
+    try:
+        from opentelemetry import trace
+        span = trace.get_current_span()
+        for k, v in attrs.items():
+            if v is not None:
+                span.set_attribute(k, v)
+    except Exception:
+        pass
 
 
 def send(reminder_id, snooze=False, manual=False):
@@ -56,6 +76,7 @@ def send(reminder_id, snooze=False, manual=False):
             WHERE r.reminder_id = :id::uuid""", id=reminder_id)
     if not r:
         return {"result": "skipped", "why": "reminder not found"}
+    _tag(**{"trialtalk.reminder.type": r["reminder_type"]})
     # The row, not the schedule, is the source of truth (guards against stale schedules).
     # Staff can "Send now" a paused or draft reminder; schedules only fire active ones.
     allowed = ("active", "completed") if snooze else ("active", "paused", "draft") if manual else ("active",)
@@ -88,6 +109,7 @@ def send(reminder_id, snooze=False, manual=False):
         except ClientError as e2:
             status = "failed"
             print(f"fallback failed too: {e2.response['Error']}")
+    _tag(**{"trialtalk.msg_type": msg_type, "trialtalk.reminder.delivery_status": status})
 
     with Tx() as tx:
         comm = tx.one("""

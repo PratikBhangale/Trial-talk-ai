@@ -9,9 +9,11 @@ The topic is a standard SNS topic, which can't feed a FIFO queue directly; this 
 """
 import json
 import os
+from contextlib import contextmanager
 
 import boto3
 
+import telemetry
 from db import Tx
 from wa import message_fields, parse_sns
 
@@ -40,32 +42,57 @@ def handle_status(s, aws_id):
 
 
 def handle_message(m):
-    f = message_fields(m)
-    with Tx() as tx:
-        p = tx.one("SELECT participant_id FROM pii.participants WHERE phone_e164 = :ph", ph=f["phone"])
-        pid = p["participant_id"] if p else None
-        parsed = {"button_id": f["button_id"], "button_text": f["button_text"]} if f["button_id"] or f["button_text"] else None
-        attachments = [{"media_id": f["media_id"], "scan_status": "not_fetched"}] if f["media_id"] else []
-        row = tx.one("""
-            INSERT INTO trial.communications (participant_id, channel, direction, msg_type, from_addr,
-              body_text, parsed_action, provider_message_id, attachments)
-            VALUES (:pid, 'whatsapp', 'inbound', :t, :ph, :body, :pa::jsonb, :wamid, :att::jsonb)
-            ON CONFLICT (provider_message_id) DO NOTHING
-            RETURNING comm_id""",
-            pid=pid, t=f["type"], ph=f["phone"], body=f["text"], pa=parsed, wamid=f["wamid"], att=attachments)
-    if not row:
-        print(f"duplicate {f['wamid']}, skipped")
+    with _span("whatsapp.ingest", "CONSUMER") as span:
+        f = message_fields(m)
+        span.set_attribute("trialtalk.msg_type", f["type"])
+        with Tx() as tx:
+            p = tx.one("SELECT participant_id FROM pii.participants WHERE phone_e164 = :ph", ph=f["phone"])
+            pid = p["participant_id"] if p else None
+            parsed = {"button_id": f["button_id"], "button_text": f["button_text"]} if f["button_id"] or f["button_text"] else None
+            attachments = [{"media_id": f["media_id"], "scan_status": "not_fetched"}] if f["media_id"] else []
+            row = tx.one("""
+                INSERT INTO trial.communications (participant_id, channel, direction, msg_type, from_addr,
+                  body_text, parsed_action, provider_message_id, attachments)
+                VALUES (:pid, 'whatsapp', 'inbound', :t, :ph, :body, :pa::jsonb, :wamid, :att::jsonb)
+                ON CONFLICT (provider_message_id) DO NOTHING
+                RETURNING comm_id""",
+                pid=pid, t=f["type"], ph=f["phone"], body=f["text"], pa=parsed, wamid=f["wamid"], att=attachments)
+        span.set_attribute("trialtalk.duplicate", not row)
+        if not row:
+            print(f"duplicate {f['wamid']}, skipped")
+            return
+        if FORWARD:
+            body = {**f, "comm_id": row["comm_id"], "participant_id": pid}
+            tp = telemetry.traceparent()   # tt-router continues this trace
+            if tp:
+                body["traceparent"] = tp
+            sqs.send_message(QueueUrl=QUEUE_URL, MessageGroupId=f["phone"], MessageDeduplicationId=f["wamid"],
+                             MessageBody=json.dumps(body))
+        print(f"logged {f['type']} {row['comm_id']} for {pid or 'unknown sender'}, forwarded={FORWARD}")
+
+
+@contextmanager
+def _span(name, kind, **attrs):
+    """telemetry.span() with an OTel span kind (telemetry.span() takes none, and that module is kept
+    byte-identical with coordinator-backend's copy)."""
+    tracer = telemetry._state.get("tracer") if telemetry.init() else None
+    if tracer is None:
+        with telemetry.span(name, **attrs) as s:   # no-op without the SDK
+            yield s
         return
-    if FORWARD:
-        sqs.send_message(QueueUrl=QUEUE_URL, MessageGroupId=f["phone"], MessageDeduplicationId=f["wamid"],
-                         MessageBody=json.dumps({**f, "comm_id": row["comm_id"], "participant_id": pid}))
-    print(f"logged {f['type']} {row['comm_id']} for {pid or 'unknown sender'}, forwarded={FORWARD}")
+    from opentelemetry.trace import SpanKind
+    with tracer.start_as_current_span(name, kind=SpanKind[kind], attributes=attrs or None,
+                                      record_exception=True, set_status_on_exception=True) as s:
+        yield s
 
 
 def handler(event, context):
-    for kind, item, aws_id in parse_sns(event):
-        if kind == "status":
-            handle_status(item, aws_id)
-        else:
-            handle_message(item)
-    return {"ok": True}
+    try:
+        for kind, item, aws_id in parse_sns(event):
+            if kind == "status":
+                handle_status(item, aws_id)
+            else:
+                handle_message(item)
+        return {"ok": True}
+    finally:
+        telemetry.flush()

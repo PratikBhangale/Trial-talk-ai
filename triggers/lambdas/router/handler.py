@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import schedules
+import telemetry
 import wa
 from db import Tx
 
@@ -72,10 +74,12 @@ def reply(m, pid, lang, text, **usage):
         print(f"send failed: {e.response['Error']}")
     with Tx() as tx:
         tx.q("""INSERT INTO trial.communications (participant_id, channel, direction, msg_type, to_addr,
-                  body_text, provider_message_id, delivery_status, session_id, latency_ms)
-                VALUES (:pid, 'whatsapp', 'outbound', 'text', :to, :body, :mid, :st, :sid, :lat::int)""",
+                  body_text, provider_message_id, delivery_status, session_id, latency_ms, input_tokens, output_tokens)
+                VALUES (:pid, 'whatsapp', 'outbound', 'text', :to, :body, :mid, :st, :sid, :lat::int,
+                  :in_tok::int, :out_tok::int)""",
              pid=pid, to=m["phone"], body=text, mid=msg_id, st=status,
-             sid=usage.get("session_id"), lat=usage.get("latency_ms"))
+             sid=usage.get("session_id"), lat=usage.get("latency_ms"),
+             in_tok=usage.get("input_tokens"), out_tok=usage.get("output_tokens"))
 
 
 # ---------- Layer 0 ----------
@@ -176,56 +180,118 @@ def ask_agent(p, text):
     local_day = datetime.now(ZoneInfo(p["timezone"])).strftime("%Y-%m-%d")
     session = f"trialtalk-wa-{p['participant_id']}-{local_day}".ljust(33, "0")   # API needs 33+ chars
     start = time.time()
-    resp = agentcore.invoke_agent_runtime(
-        agentRuntimeArn=RUNTIME_ARN, runtimeSessionId=session,
-        payload=json.dumps({"participant_id": p["participant_id"], "text": text}).encode())
-    body = json.loads(resp["response"].read())
-    return body.get("reply"), {"session_id": session, "latency_ms": int((time.time() - start) * 1000)}
+    with _span("agent.call", "CLIENT") as span:
+        payload = {"participant_id": p["participant_id"], "text": text}
+        tp = telemetry.traceparent()   # the agent's spans join this trace, under agent.call
+        if tp:
+            payload["traceparent"] = tp
+        resp = agentcore.invoke_agent_runtime(
+            agentRuntimeArn=RUNTIME_ARN, runtimeSessionId=session,
+            payload=json.dumps(payload).encode())
+        body = json.loads(resp["response"].read())
+        tokens = agent_usage(body, span)
+    return body.get("reply"), {"session_id": session, "latency_ms": int((time.time() - start) * 1000), **tokens}
+
+
+# ---------- telemetry (never changes a reply: every failure here is swallowed) ----------
+
+_agent_traces = []   # traces the agent returned; persisted after the replies are sent, not before
+
+
+def agent_usage(body, span):
+    """Token counts from the agent's response (absent on old agents and error replies), recorded on the
+    agent.call span. The agent's own spans are queued for persist_agent_traces()."""
+    tokens = {}
+    try:
+        usage = body.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        for key in ("input_tokens", "output_tokens"):
+            v = usage.get(key)
+            if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+                tokens[key] = v
+                span.set_attribute(f"gen_ai.usage.{key}", v)
+        if isinstance(usage.get("model"), str):
+            span.set_attribute("gen_ai.request.model", usage["model"])
+        trace = body.get("trace")
+        if isinstance(trace, dict) and trace.get("trace_id") and trace.get("spans"):
+            _agent_traces.append(trace)
+    except Exception as e:
+        print(f"agent usage not recorded: {type(e).__name__}")
+    return tokens
+
+
+def persist_agent_traces():
+    while _agent_traces:
+        trace = _agent_traces.pop(0)
+        telemetry.persist_spans(trace["spans"], service="trial-agent", trace_id=trace["trace_id"])
+
+
+@contextmanager
+def _span(name, kind, traceparent=None, **attrs):
+    """telemetry.span() with an OTel span kind, continuing `traceparent` (W3C) when it is valid. telemetry.span()
+    takes neither, and that module is kept byte-identical with coordinator-backend's copy."""
+    attrs = {k: v for k, v in attrs.items() if v is not None}
+    tracer = telemetry._state.get("tracer") if telemetry.init() else None
+    if tracer is None:
+        with telemetry.span(name, **attrs) as s:   # no-op without the SDK
+            yield s
+        return
+    from opentelemetry.trace import SpanKind
+    with tracer.start_as_current_span(name, context=telemetry.context_from(traceparent), kind=SpanKind[kind],
+                                      attributes=attrs or None, record_exception=True,
+                                      set_status_on_exception=True) as s:
+        yield s
 
 
 def handler(event, context):
-    for record in event["Records"]:
-        m = json.loads(record["body"])
-        pid = m.get("participant_id")
-        if not pid:
-            reply(m, None, "en", t("en", "unknown"))
-            continue
-        with Tx() as tx:
-            p = tx.one("""SELECT participant_id, preferred_language, timezone, whatsapp_opt_in, site_id, status
-                          FROM pii.participants WHERE participant_id = :pid""", pid=pid)
-        lang, text = p["preferred_language"], normalize(m.get("text"))
+    try:
+        for record in event["Records"]:
+            m = json.loads(record["body"])
+            with _span("whatsapp.route", "CONSUMER", m.get("traceparent"),
+                       **{"trialtalk.msg_type": m.get("type")}):
+                pid = m.get("participant_id")
+                if not pid:
+                    reply(m, None, "en", t("en", "unknown"))
+                    continue
+                with Tx() as tx:
+                    p = tx.one("""SELECT participant_id, preferred_language, timezone, whatsapp_opt_in, site_id, status
+                                  FROM pii.participants WHERE participant_id = :pid""", pid=pid)
+                lang, text = p["preferred_language"], normalize(m.get("text"))
 
-        # Layer 0: opt-out / opt-in
-        if text in STOP_WORDS:
-            with Tx() as tx:
-                tx.q("UPDATE pii.participants SET whatsapp_opt_in = false WHERE participant_id = :pid", pid=pid)
-            reply(m, pid, lang, t(lang, "stopped"))
-            continue
-        if text in START_WORDS:
-            with Tx() as tx:
-                tx.q("UPDATE pii.participants SET whatsapp_opt_in = true WHERE participant_id = :pid", pid=pid)
-            reply(m, pid, lang, t(lang, "started"))
-            continue
-        if not p["whatsapp_opt_in"]:
-            print(f"{pid} has opted out; not replying")
-            continue
+                # Layer 0: opt-out / opt-in
+                if text in STOP_WORDS:
+                    with Tx() as tx:
+                        tx.q("UPDATE pii.participants SET whatsapp_opt_in = false WHERE participant_id = :pid", pid=pid)
+                    reply(m, pid, lang, t(lang, "stopped"))
+                    continue
+                if text in START_WORDS:
+                    with Tx() as tx:
+                        tx.q("UPDATE pii.participants SET whatsapp_opt_in = true WHERE participant_id = :pid", pid=pid)
+                    reply(m, pid, lang, t(lang, "started"))
+                    continue
+                if not p["whatsapp_opt_in"]:
+                    print(f"{pid} has opted out; not replying")
+                    continue
 
-        if not m.get("text"):
-            reply(m, pid, lang, t(lang, "media"))
-            continue
+                if not m.get("text"):
+                    reply(m, pid, lang, t(lang, "media"))
+                    continue
 
-        # Layer 0: emergency keywords. Alert first, then the agent still answers.
-        hits = [w for w in EMERGENCY if w in text]
-        if hits:
-            emergency(m, p, hits)
+                # Layer 0: emergency keywords. Alert first, then the agent still answers.
+                hits = [w for w in EMERGENCY if w in text]
+                if hits:
+                    emergency(m, p, hits)
 
-        agent_text = dose_button(m, p) if m["type"] in ("button", "button_reply") else m["text"]
-        if agent_text is None:
-            continue
-        try:
-            answer, usage = ask_agent(p, agent_text)
-        except Exception as e:
-            print(f"agent call failed for {pid}: {e}")
-            answer, usage = None, {}
-        reply(m, pid, lang, answer or t(lang, "error"), **usage)
-    return {"ok": True}
+                agent_text = dose_button(m, p) if m["type"] in ("button", "button_reply") else m["text"]
+                if agent_text is None:
+                    continue
+                try:
+                    answer, usage = ask_agent(p, agent_text)
+                except Exception as e:
+                    print(f"agent call failed for {pid}: {e}")
+                    answer, usage = None, {}
+                reply(m, pid, lang, answer or t(lang, "error"), **usage)
+        return {"ok": True}
+    finally:
+        persist_agent_traces()
+        telemetry.flush()

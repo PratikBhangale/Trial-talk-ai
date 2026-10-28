@@ -10,12 +10,26 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import schedules
+import telemetry
 from db import Tx
 
 scheduler = schedules.scheduler
 
 
 def handler(event, context):
+    try:
+        with telemetry.span("reconcile.run") as span:
+            result = reconcile(event)
+            span.set_attribute("trialtalk.reconcile.dry_run", bool(result["dry_run"]))
+            for key in ("created", "deleted", "skipped"):
+                span.set_attribute(f"trialtalk.reconcile.{key}", len(result[key]))
+            span.set_attribute("trialtalk.reconcile.active_rows", result["active_rows"])
+        return result
+    finally:
+        telemetry.flush()
+
+
+def reconcile(event):
     dry = event.get("dry_run", os.environ.get("DRY_RUN", "1") == "1")
     with Tx() as tx:
         rows = {r["reminder_id"]: r for r in tx.q("""
