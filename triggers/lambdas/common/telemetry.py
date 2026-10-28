@@ -181,6 +181,7 @@ if AVAILABLE:
                     "span_id": f"{ctx.span_id:016x}",
                     "parent_id": f"{parent.span_id:016x}" if parent else None,
                     "name": s.name,
+                    "kind": s.kind.name,
                     "start": datetime.fromtimestamp(s.start_time / 1e9, timezone.utc).isoformat(timespec="milliseconds"),
                     "duration_ms": round((s.end_time - s.start_time) / 1e6, 2),
                     "status": s.status.status_code.name,
@@ -309,14 +310,29 @@ def context_from(tp: str | None):
         return None
 
 
+def _span_kind(kind):
+    """SpanKind from a SpanKind or a case-insensitive name (SERVER, CLIENT, CONSUMER, ...); anything else is INTERNAL."""
+    if isinstance(kind, trace.SpanKind):
+        return kind
+    try:
+        return trace.SpanKind[str(kind).upper()]
+    except KeyError:
+        return trace.SpanKind.INTERNAL
+
+
 @contextmanager
-def span(name: str, **attributes):
-    """Child span (or a root one outside a request). Exceptions are recorded and re-raised."""
+def span(name: str, kind="INTERNAL", context_carrier: str | None = None, **attributes):
+    """Child span (or a root one outside a request). Exceptions are recorded and re-raised.
+
+    kind: a SpanKind or its name ("SERVER", "CLIENT", "CONSUMER", ...). context_carrier: a W3C traceparent string;
+    when valid the span continues that remote trace, otherwise it starts from the current context.
+    """
     if not init():
         yield _NullSpan()
         return
-    with _state["tracer"].start_as_current_span(name, attributes=attributes or None,
-                                                record_exception=True, set_status_on_exception=True) as s:
+    with _state["tracer"].start_as_current_span(
+            name, context=context_from(context_carrier), kind=_span_kind(kind), attributes=attributes or None,
+            record_exception=True, set_status_on_exception=True) as s:
         yield s
 
 

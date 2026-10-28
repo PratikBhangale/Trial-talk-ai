@@ -101,6 +101,7 @@ def test_nan_attr_does_not_poison_batch(rds):
 
 
 def test_rds_client_has_short_timeouts(monkeypatch):
+    pytest.importorskip("botocore")
     seen = {}
     monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(
         client=lambda name, **kw: seen.update(kw) or FakeRds()))
@@ -180,6 +181,44 @@ def test_traceparent_roundtrip():
     assert trace.get_current_span(ctx).get_span_context().trace_id == sc.trace_id
     assert telemetry.context_from("garbage") is None
     assert telemetry.context_from(None) is None
+
+
+@needs_sdk
+def test_span_kind_lands_on_exported_span():
+    telemetry.init(force=True)
+    with telemetry.span("consume", kind="CONSUMER"):
+        with telemetry.span("call", kind="client"):
+            with telemetry.span("plain"):
+                pass
+    kinds = {s["name"]: s["kind"] for s in telemetry.snapshot()["spans"]}
+    assert kinds == {"consume": "CONSUMER", "call": "CLIENT", "plain": "INTERNAL"}
+
+
+@needs_sdk
+def test_span_continues_remote_traceparent():
+    telemetry.init(force=True)
+    remote = "00-" + "ab" * 16 + "-" + "cd" * 8 + "-01"
+    with telemetry.span("handle", kind="CONSUMER", context_carrier=remote, **{"trialtalk.x": 1}):
+        pass
+    (s,) = telemetry.snapshot()["spans"]
+    assert s["trace_id"] == "ab" * 16 and s["parent_id"] == "cd" * 8
+    assert s["attributes"]["trialtalk.x"] == 1
+
+
+@needs_sdk
+def test_span_garbage_traceparent_starts_fresh_trace():
+    telemetry.init(force=True)
+    with telemetry.span("handle", context_carrier="garbage"):
+        pass
+    (s,) = telemetry.snapshot()["spans"]
+    assert s["parent_id"] is None and len(s["trace_id"]) == 32
+
+
+def test_span_accepts_new_args_without_sdk(monkeypatch):
+    monkeypatch.setattr(telemetry, "AVAILABLE", False)
+    monkeypatch.setattr(telemetry, "_state", {})
+    with telemetry.span("x", kind="CONSUMER", context_carrier="garbage", a=1) as s:
+        s.set_attribute("k", 1)
 
 
 def test_telemetry_copies_identical():
