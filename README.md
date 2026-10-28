@@ -100,7 +100,7 @@ flowchart LR
 ```
 
 
-The WhatsApp cutover is done: `tt-ingest` forwards every inbound message to `tt-router`, and the older single `continuum-whatsapp` Lambda is unsubscribed from the topic (rollback steps in [`triggers/README.md`](triggers/README.md#switching-on-cutover)). Source of truth for the deployed system is what is in AWS (account `180026596905`, us-east-1, resources named `tt-*`), not a CDK app. `agent/trial_agent`, `triggers/` and `coordinator-backend/lambdas` match the deployed code. The original design doc (`TrialTalk build plan.pdf`) is kept out of git.
+The WhatsApp cutover is done: `tt-ingest` forwards every inbound message to `tt-router`, and the older single-Lambda WhatsApp handler is unsubscribed from the topic (rollback steps in [`triggers/README.md`](triggers/README.md#switching-on-cutover)). Source of truth for the deployed system is what is in AWS (account `180026596905`, us-east-1, resources named `tt-*`), not a CDK app. `agent/trial_agent`, `triggers/` and `coordinator-backend/lambdas` match the deployed code. The original design doc (`TrialTalk build plan.pdf`) is kept out of git.
 
 ## Deploying to AWS
 
