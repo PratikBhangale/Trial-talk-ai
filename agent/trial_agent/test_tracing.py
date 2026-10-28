@@ -257,6 +257,21 @@ def test_profile_fields_match_agent_role_grant(monkeypatch):
     cols = re.search(r"SELECT (.*?)\s+FROM pii\.participants", seen[0], re.S).group(1)
     assert {c.strip() for c in cols.split(",")} <= grant
 
+    # trial.reminders: agent_role's SELECT (table-level today, column-level if it is ever narrowed)
+    # must cover every column the store's reminder query reads
+    rem_cols = {c.strip() for c in
+                re.search(r"SELECT (.*?)\s+FROM trial\.reminders", seen[1], re.S).group(1).split(",")}
+    sql = (DB_DIR / "02_roles_rls.sql").read_text()
+    m = re.search(r"GRANT SELECT(?:\s*\(([^)]*)\))?\s+ON trial\.reminders TO agent_role", sql)
+    assert m, "agent_role SELECT grant on trial.reminders not found"
+    if m.group(1):
+        assert rem_cols <= {c.strip() for c in m.group(1).split(",")}
+    else:  # table-level grant: the columns just have to exist
+        table = re.search(r"CREATE TABLE trial\.reminders \((.*?)\n\);",
+                          (DB_DIR / "01_schema.sql").read_text(), re.S).group(1)
+        defined = set(re.findall(r"^\s+([a-z_]+)\s+\w", table, re.M))
+        assert rem_cols <= defined, rem_cols - defined
+
 
 def test_profile_returns_only_granted_fields_and_phi_free_span(monkeypatch):
     monkeypatch.setattr(tools.store, "get_profile",
@@ -299,6 +314,25 @@ def test_profile_store_failure_returns_graceful_message(monkeypatch):
     [s] = _by_name(col.result(), "tool.get_participant_profile")
     assert s["status"] == "ERROR"
     assert "P-0201" not in repr(s["attributes"])
+
+
+def test_escalation_still_emails_when_profile_lookup_fails(monkeypatch):
+    sent = []
+    monkeypatch.setattr(tools.store, "get_profile", _db_down)
+    monkeypatch.setattr(tools, "ses", SimpleNamespace(send_email=lambda **kw: sent.append(kw)))
+    with tracing.collect(None) as col:
+        out = tools.escalate_to_coordinator(severity="emergency", summary="lips swelling",
+                                            tool_context=_ctx())  # must not raise
+    assert out == "Coordinator alerted by email with severity emergency."
+    [email] = sent
+    subject = email["Content"]["Simple"]["Subject"]["Data"]
+    body = email["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert "unknown study" in subject and "site unknown" in subject
+    assert "site unknown" in body and "unknown study" in body and "lips swelling" in body
+    [s] = _by_name(col.result(), "tool.escalate_to_coordinator")
+    assert s["status"] == "OK"  # the alert went out; the lookup failure is recorded by type only
+    assert s["attributes"] == {"trialtalk.escalation.severity": "emergency",
+                               "trialtalk.profile.lookup_failed": "RuntimeError"}
 
 
 def test_profile_tool_is_registered_and_configured():

@@ -66,7 +66,13 @@ def escalate_to_coordinator(severity: str, summary: str, tool_context: ToolConte
         "trialtalk.escalation.severity": severity if severity in SEVERITIES else "other",
     }) as span:
         pid = tool_context.agent.state.get("participant_id")
-        profile = store.get_profile(pid) or {}
+        # The alert must go out even if the database is down: site/study degrade to "unknown"
+        try:
+            profile = store.get_profile(pid) or {}
+        except Exception as e:
+            print(f"\n*** PROFILE LOOKUP FAILED during escalation: {type(e).__name__} ***\n")
+            tracing.set_attrs(span, **{"trialtalk.profile.lookup_failed": type(e).__name__})
+            profile = {}
         name = f"site {profile.get('site_id', 'unknown')}"
         trial = profile.get("study_id", "unknown study")
 
