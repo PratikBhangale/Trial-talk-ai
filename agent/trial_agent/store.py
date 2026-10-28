@@ -46,7 +46,7 @@ def get_profile(pid: str) -> dict | None:
     participant, reminders = _read(pid, [
         """SELECT participant_id, study_id, site_id, status, preferred_language, timezone
            FROM pii.participants WHERE participant_id = :pid""",
-        """SELECT label, cron_expr, template_params
+        """SELECT label, cron_expr, timezone, template_params
            FROM trial.reminders
            WHERE participant_id = :pid AND reminder_type = 'dose' AND status = 'active'""",
     ])

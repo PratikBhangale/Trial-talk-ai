@@ -3,7 +3,9 @@
 Run from agent/trial_agent/:  python -m pytest test_tracing.py -v
 """
 
+import json
 import os
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -214,3 +216,121 @@ def test_escalate_span_has_severity_only(monkeypatch):
     [s] = _by_name(col.result(), "tool.escalate_to_coordinator")
     assert s["attributes"] == {"trialtalk.escalation.severity": "routine"}
     assert s["status"] == "OK"
+
+
+# ---- get_participant_profile -------------------------------------------------------------------
+
+DB_DIR = Path(__file__).resolve().parents[2] / "db"
+_GRANTED = {"participant_id": "P-0201", "study_id": "T1", "site_id": "S1", "status": "enrolled",
+            "preferred_language": "en", "timezone": "America/Chicago"}
+_REMINDER = {"label": "Morning dose", "cron_expr": "cron(0 8 * * ? *)", "timezone": "America/Chicago",
+             "template_params": '{"1":"morning"}'}
+# Columns agent_role cannot read: a stub returning them proves the tool filters whatever the store returns
+_UNGRANTED = {"full_name": "Jane Roe", "phone_e164": "+15550100", "date_of_birth": "1980-01-01"}
+
+
+def _ctx(pid="P-0201"):
+    return SimpleNamespace(agent=SimpleNamespace(state={"participant_id": pid}))
+
+
+def _agent_role_participant_grant() -> set[str]:
+    sql = (DB_DIR / "02_roles_rls.sql").read_text()
+    m = re.search(r"GRANT SELECT \(([^)]*)\)\s+ON pii\.participants TO agent_role", sql)
+    assert m, "agent_role column grant on pii.participants not found"
+    return {c.strip() for c in m.group(1).split(",")}
+
+
+@pytest.mark.skipif(not (DB_DIR / "02_roles_rls.sql").exists(), reason="db/ not alongside the agent")
+def test_profile_fields_match_agent_role_grant(monkeypatch):
+    grant = _agent_role_participant_grant()
+    assert set(tools.PROFILE_FIELDS) - {"dose_reminders"} == grant
+    # The store's own SELECT on pii.participants must stay inside the grant too
+    seen = []
+
+    def fake_read(pid, statements):
+        seen.extend(statements)
+        return [[dict(_GRANTED)], [dict(_REMINDER)]]
+
+    monkeypatch.setattr(tools.store, "_read", fake_read)
+    profile = tools.store.get_profile("P-0201")
+    assert profile["dose_reminders"] == [_REMINDER]
+    cols = re.search(r"SELECT (.*?)\s+FROM pii\.participants", seen[0], re.S).group(1)
+    assert {c.strip() for c in cols.split(",")} <= grant
+
+
+def test_profile_returns_only_granted_fields_and_phi_free_span(monkeypatch):
+    monkeypatch.setattr(tools.store, "get_profile",
+                        lambda pid: {**_GRANTED, **_UNGRANTED, "dose_reminders": [_REMINDER]})
+    with tracing.collect(None) as col:
+        out = tools.get_participant_profile(tool_context=_ctx())
+
+    data = json.loads(out)
+    assert set(data) == set(tools.PROFILE_FIELDS)
+    assert data["timezone"] == "America/Chicago" and data["dose_reminders"] == [_REMINDER]
+    assert "Jane" not in out and "+1555" not in out and "1980" not in out
+
+    [s] = _by_name(col.result(), "tool.get_participant_profile")
+    assert s["status"] == "OK"
+    assert s["attributes"] == {"trialtalk.profile.found": True, "trialtalk.profile.fields": 7,
+                               "trialtalk.profile.dose_reminders": 1}
+    flat = repr(s["attributes"])
+    for value in ("P-0201", "T1", "S1", "America/Chicago", "Morning dose", "cron(", "Jane", "+1555"):
+        assert value not in flat
+
+
+def test_profile_missing_is_not_guessed(monkeypatch):
+    monkeypatch.setattr(tools.store, "get_profile", lambda pid: None)
+    with tracing.collect(None) as col:
+        out = tools.get_participant_profile(tool_context=_ctx())
+    assert "Do not guess" in out
+    [s] = _by_name(col.result(), "tool.get_participant_profile")
+    assert s["status"] == "OK" and s["attributes"] == {"trialtalk.profile.found": False}
+
+
+def _db_down(pid):
+    raise RuntimeError("Database did not wake up in time for P-0201")
+
+
+def test_profile_store_failure_returns_graceful_message(monkeypatch):
+    monkeypatch.setattr(tools.store, "get_profile", _db_down)
+    with tracing.collect(None) as col:
+        out = tools.get_participant_profile(tool_context=_ctx())  # must not raise
+    assert "could not be loaded" in out and "Do not guess" in out
+    [s] = _by_name(col.result(), "tool.get_participant_profile")
+    assert s["status"] == "ERROR"
+    assert "P-0201" not in repr(s["attributes"])
+
+
+def test_profile_tool_is_registered_and_configured():
+    assert tools.TOOLS["get_participant_profile"] is tools.get_participant_profile
+    assert "get_participant_profile" in core.CONFIG["tools"]
+    assert all(name in tools.TOOLS for name in core.CONFIG["tools"])
+    # The prompt only promises what the tool can fetch: never the participant's name
+    assert "their name, trial" not in core.CONFIG["system_prompt"]
+
+
+@pytest.mark.parametrize("store_fn", [
+    lambda pid: {**_GRANTED, "dose_reminders": [_REMINDER]},
+    _db_down,
+], ids=["store-ok", "store-down"])
+def test_handle_message_with_profile_tool_keeps_contract(monkeypatch, store_fn):
+    monkeypatch.setattr(tools.store, "get_profile", store_fn)
+
+    def behaviour(text):  # the model calls the profile tool, then replies
+        tools.get_participant_profile(tool_context=_ctx())
+        return _Result("Your morning dose reminder is at 8 AM.")
+
+    _stub_agent(monkeypatch, behaviour)
+    resp = app.invoke({"participant_id": "P-0201", "text": "when is my next dose?", "traceparent": TRACEPARENT})
+
+    assert resp["reply"] == "Your morning dose reminder is at 8 AM."
+    assert set(resp["usage"]) == {"input_tokens", "output_tokens", "latency_ms", "model"}
+    trace = resp["trace"]
+    assert trace["trace_id"] == TRACE_ID
+    [root] = _by_name(trace, "agent.invoke")
+    assert root["status"] == "OK"
+    [tool_span] = _by_name(trace, "tool.get_participant_profile")
+    assert tool_span["parent_id"] == root["span_id"]
+    for s in trace["spans"]:
+        flat = repr(s["attributes"])
+        assert "P-0201" not in flat and "America/Chicago" not in flat and "Morning dose" not in flat

@@ -16,22 +16,41 @@ kb = boto3.client("bedrock-agent-runtime", region_name=CONFIG["model"]["region"]
 # Read lazily-tolerant: a missing id degrades search_trial_docs instead of crashing the whole agent
 KNOWLEDGE_BASE_ID = os.environ.get("KNOWLEDGE_BASE_ID")
 
-# Only these profile fields are ever shown to the agent
+# Only these profile fields are ever shown to the agent. They match agent_role's column grant on
+# pii.participants (db/02_roles_rls.sql: no name, contact details or date of birth) plus the
+# participant's active dose reminders from trial.reminders (SELECT granted, RLS-scoped).
 PROFILE_FIELDS = ("participant_id", "study_id", "site_id", "status", "preferred_language",
                   "timezone", "dose_reminders")
 SEVERITIES = ("emergency", "same_day_review", "routine")
 
-# @tool(context=True)
-# def get_participant_profile(tool_context: ToolContext = None) -> str:
-#     """Look up the current participant's profile: name, trial, enrollment date, dose times, and timezone.
-#     Use this when you need details about the participant you are talking to.
-#     """
-#     with tracing.span("tool.get_participant_profile"):  # no attributes: the profile is PHI
-#         pid = tool_context.agent.state.get("participant_id")  # set by code, never by the model
-#         profile = store.get_profile(pid)
-#         if not profile:
-#             return "No profile is on file for this participant yet. Do not guess their details."
-#         return json.dumps({k: profile[k] for k in PROFILE_FIELDS if k in profile}, default=str)
+
+@tool(context=True)
+def get_participant_profile(tool_context: ToolContext = None) -> str:
+    """Look up the current participant's trial details: study, study site, enrollment status, preferred
+    language, timezone, and active dose reminders (label, and schedule as a cron expression in the
+    reminder's own timezone). It does not include their name or contact details.
+    Use this when you need details about the participant you are talking to.
+    """
+    # Counts only: the profile is participant data, so no field values go into the span
+    with tracing.span("tool.get_participant_profile") as span:
+        pid = tool_context.agent.state.get("participant_id")  # set by code, never by the model
+        try:
+            profile = store.get_profile(pid)
+        except Exception as e:
+            print(f"\n*** PROFILE LOOKUP FAILED: {type(e).__name__} ***\n")
+            tracing.mark_error(span, f"profile lookup failed: {type(e).__name__}")
+            return ("The participant's profile could not be loaded right now. "
+                    "Do not guess their details; tell them the study team can confirm.")
+        if not profile:
+            tracing.set_attrs(span, **{"trialtalk.profile.found": False})
+            return "No profile is on file for this participant yet. Do not guess their details."
+        shown = {k: profile[k] for k in PROFILE_FIELDS if k in profile}
+        tracing.set_attrs(span, **{
+            "trialtalk.profile.found": True,
+            "trialtalk.profile.fields": len(shown),
+            "trialtalk.profile.dose_reminders": len(shown.get("dose_reminders") or []),
+        })
+        return json.dumps(shown, default=str)
 
 
 @tool(context=True)
@@ -129,7 +148,7 @@ def search_trial_docs(question: str) -> str:
 
 # Maps the tool names used in root_agent.yaml to the functions above
 TOOLS = {
-    # "get_participant_profile": get_participant_profile,
+    "get_participant_profile": get_participant_profile,
     "escalate_to_coordinator": escalate_to_coordinator,
     "search_trial_docs": search_trial_docs,
 }
