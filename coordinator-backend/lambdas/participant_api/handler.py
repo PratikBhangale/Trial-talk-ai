@@ -315,9 +315,9 @@ def chat(event, me: Participant):
         return 200, {"reply": reply, "emergency": True}
 
     started = time.monotonic()
-    usage = {}
+    usage, trace = {}, {}
     try:
-        reply, usage = ask_agent(me.participant_id, text, session_id)
+        reply, usage, trace = ask_agent(me.participant_id, text, session_id)
     except Exception as e:
         print(f"Agent call failed for {me.participant_id}: {type(e).__name__}: {e}")
         reply = AGENT_ERROR_REPLY
@@ -325,21 +325,57 @@ def chat(event, me: Participant):
 
     with scoped(me) as t:
         _log(t, me.participant_id, "outbound", reply, session_id, latency_ms, usage)
+    # Telemetry never changes the reply: from here on every failure is swallowed.
+    _persist_agent_trace(trace)
     telemetry.count("trialtalk.llm.tokens", usage.get("input_tokens") or 0, direction="input")
     telemetry.count("trialtalk.llm.tokens", usage.get("output_tokens") or 0, direction="output")
     return 200, {"reply": reply, "emergency": False}
 
 
-def ask_agent(pid: str, text: str, session_id: str) -> tuple[str, dict]:
-    """Returns (reply, usage). The agent reports usage as {input_tokens, output_tokens, model_id}; until it does, {}."""
-    with telemetry.span("agentcore.invoke", **{"rpc.system": "aws-api", "rpc.service": "bedrock-agentcore"}):
+def ask_agent(pid: str, text: str, session_id: str) -> tuple[str, dict, dict]:
+    """Returns (reply, usage, trace). The agent reports usage {input_tokens, output_tokens, latency_ms, model} and its
+    own spans as trace {trace_id, spans}; each is {} when absent (old agent, error reply) or malformed."""
+    with telemetry.span("agent.call", kind="CLIENT", **{"rpc.system": "aws-api", "rpc.service": "bedrock-agentcore"}):
+        payload = {"participant_id": pid, "text": text, "channel": "web"}
+        tp = telemetry.traceparent()  # the agent's spans join this trace, under agent.call
+        if tp:
+            payload["traceparent"] = tp
         resp = agentcore().invoke_agent_runtime(
             agentRuntimeArn=AGENT_RUNTIME_ARN,
             runtimeSessionId=session_id.ljust(33, "0"),  # AgentCore needs 33+ characters
-            payload=json.dumps({"participant_id": pid, "text": text, "channel": "web"}).encode(),
+            payload=json.dumps(payload).encode(),
         )
         out = json.loads(resp["response"].read())
-        return out.get("reply") or AGENT_ERROR_REPLY, out.get("usage") or {}
+    return out.get("reply") or AGENT_ERROR_REPLY, _clean_usage(out.get("usage")), _clean_trace(out.get("trace"))
+
+
+def _clean_usage(usage) -> dict:
+    """Only well-formed counts survive: non-negative ints, and a short model name."""
+    if not isinstance(usage, dict):
+        return {}
+    out = {}
+    for k in ("input_tokens", "output_tokens"):
+        v = usage.get(k)
+        if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+            out[k] = v
+    if isinstance(usage.get("model"), str) and usage["model"]:
+        out["model"] = usage["model"][:200]
+    return out
+
+
+def _clean_trace(trace) -> dict:
+    """The agent's trace if it has an id and spans; error replies carry trace_id "" and no spans."""
+    if isinstance(trace, dict) and isinstance(trace.get("trace_id"), str) and trace["trace_id"]             and isinstance(trace.get("spans"), list) and trace["spans"]:
+        return trace
+    return {}
+
+
+def _persist_agent_trace(trace: dict) -> None:
+    try:
+        if trace:
+            telemetry.persist_spans(trace["spans"], service="trial-agent", trace_id=trace["trace_id"])
+    except Exception as e:
+        print(f"agent trace not stored: {type(e).__name__}")
 
 
 def _log(t: db.Tx, pid: str, direction: str, text: str, session_id: str, latency_ms: int | None = None,
@@ -350,7 +386,7 @@ def _log(t: db.Tx, pid: str, direction: str, text: str, session_id: str, latency
         "  latency_ms, input_tokens, output_tokens, model_id) "
         "VALUES (:pid, 'web', :dir, 'text', :body, :sid, :lat::int, :tin::int, :tout::int, :model::text)",
         pid=pid, dir=direction, body=text, sid=session_id, lat=latency_ms, tin=usage.get("input_tokens"),
-        tout=usage.get("output_tokens"), model=usage.get("model_id"))
+        tout=usage.get("output_tokens"), model=usage.get("model"))
 
 
 def _alert_team(p: dict, hits: list[str], severity: str) -> None:

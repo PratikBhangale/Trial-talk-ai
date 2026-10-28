@@ -1,6 +1,7 @@
 """Local test UI: staff and participant portals over the real Lambda handlers. No AWS needed.
 
     TT_PG_BIN=<folder with initdb/pg_ctl> python coordinator-backend/devserver/server.py [--port 8787] [--real-agent]
+                                                                                       [--seed-telemetry]
 
 Starts a throwaway PostgreSQL built from db/ (plus tests/pending_db_additions.sql), loads db/03_seed.sql, the
 same synthetic data as the deployed database, adds synthetic staff, and serves:
@@ -16,6 +17,9 @@ real staff pre-token trigger, so what the staff "Team" panel changes (role, site
 next request gets. OpenTelemetry needs `pip install opentelemetry-sdk`; without it the widget says so. Database calls run as each Lambda's own login, so RLS and grants are real.
 Scheduler, WhatsApp, SES and the agent are fakes (tests/local_env.py), unless --real-agent, which
 sends web chat to the deployed AgentCore runtime with your local AWS credentials.
+--seed-telemetry adds about 7 days of synthetic traces (trial.telemetry_spans) and token-bearing messages so the
+staff Observability dashboard has something to show; every synthetic span carries "trialtalk.synthetic": true, and
+it is re-created after "Reset data".
 Synthetic data only. Everything is deleted when the server stops.
 """
 
@@ -23,10 +27,12 @@ import argparse
 import io
 import json
 import os
+import random
 import sys
 import traceback
 import threading
 import types
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
@@ -35,7 +41,7 @@ HERE = Path(__file__).resolve().parent
 UI = HERE.parents[1] / "coordinator-frontend"
 sys.path.insert(0, str(HERE.parent / "tests"))
 
-from local_env import (FakeAgentCore, fake_usage, FakeCognito, FakeRdsData, FakeScheduler,  # noqa: E402
+from local_env import (FakeAgentCore, FakeCognito, FakeRdsData, FakeScheduler,  # noqa: E402
                        FakeWhatsApp, LocalPostgres, SEED_FILE, run_sql_file, wipe)
 
 from common import db, scheduling, telemetry, whatsapp  # noqa: E402
@@ -47,7 +53,7 @@ import staff_api.handler as staff  # noqa: E402
 
 PAGES = {"/": "index.html", "/staff": "staff.html", "/participant": "participant.html",
          "/ui/common.css": "common.css", "/ui/common.js": "common.js",
-         "/ui/widgets.js": "widgets.js", "/ui/orb.js": "orb.js"}
+         "/ui/widgets.js": "widgets.js", "/ui/orb.js": "orb.js", "/ui/charts.js": "charts.js"}
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8"}
 
@@ -72,6 +78,7 @@ fakes = types.SimpleNamespace()
 # request. So everything that runs a handler or touches the fakes holds this lock; static files do not.
 LOCK = threading.RLock()
 pg: LocalPostgres | None = None
+SEED_TELEMETRY = False  # --seed-telemetry: seed() also adds the synthetic observability data
 
 
 class AuthError(Exception):
@@ -79,12 +86,9 @@ class AuthError(Exception):
 
 
 class EchoAgent(FakeAgentCore):
-    def invoke_agent_runtime(self, agentRuntimeArn, runtimeSessionId, payload):
-        body = json.loads(payload)
-        self.calls.append({"session": runtimeSessionId, **body})
-        reply = (f"(local fake agent) You said: \"{body['text']}\". Start the server with --real-agent "
-                 "to talk to the deployed trial_agent.")
-        return {"response": io.BytesIO(json.dumps({"reply": reply, "usage": fake_usage(body["text"], reply)}).encode())}
+    def reply_for(self, body):
+        return (f"(local fake agent) You said: \"{body['text']}\". Start the server with --real-agent "
+                "to talk to the deployed trial_agent.")
 
 
 def wire(real_agent: bool) -> None:
@@ -100,6 +104,14 @@ def wire(real_agent: bool) -> None:
     staff.lambda_client = lambda: types.SimpleNamespace(invoke=_invoke_reminder)
     accounts.cognito = lambda: fakes.staff_pool
     accounts.STAFF_POOL_ID = "local-staff-pool"
+    # Web chat stores the agent's returned spans through telemetry.persist_spans (its own Data API client). Point it at
+    # the local database as the staff login (the only one allowed that INSERT ... ON CONFLICT (span_id); see
+    # db/05_telemetry.sql grants). The per-request span sink stays
+    # off so the staff dashboard's own polling doesn't bury the demo traces; TELEMETRY_DB_SINK=1 turns it on.
+    os.environ.setdefault("DB_CLUSTER_ARN", "local-cluster")
+    os.environ.setdefault("DB_SECRET_ARN", "staff")
+    os.environ.setdefault("TELEMETRY_DB_SINK", "0")
+    telemetry._rds = fakes.rds
     telemetry.init()
     participant.ses = lambda: types.SimpleNamespace(send_email=lambda **kw: fakes.emails.append(kw))
     participant.ALERT_FROM = "alerts@example.org"
@@ -204,9 +216,137 @@ def seed() -> None:
     for r in admin_query("SELECT reminder_id::text AS reminder_id, schedule_kind, cron_expr, send_at, timezone,"
                          "  starts_on, ends_on, status FROM trial.reminders WHERE status = 'active'"):
         scheduling.create(r)
+    if SEED_TELEMETRY:
+        seed_telemetry()
     telemetry.reset()  # the window should start with the first thing you do, not the seeding
     print(f"Seeded {1 + len(SEED_STAFF)} staff users, participants "
           f"{', '.join(p['participant_id'] for p in participants)} (db/03_seed.sql)")
+
+
+# ------------------------------------------------------------------ synthetic telemetry (--seed-telemetry)
+
+SYNTH = {"trialtalk.synthetic": True}  # in EVERY synthetic span's attributes; how the seed finds its own rows
+SYNTH_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+SYNTH_HASH_BEFORE, SYNTH_HASH_AFTER = "3f9a1c2b7d10", "8e4d6a05b1c7"
+# A generic, PHI-free reply body for the token-bearing messages; real text never goes near telemetry.
+SYNTH_REPLY = ("[demo data] Thanks for letting us know. Your study team has this on record and will follow up at "
+               "your next visit. If anything changes or you feel worse, contact your study site. ")
+HOUR_WEIGHTS = [1, 1, 1, 1, 1, 1, 2, 4, 6, 8, 8, 7, 7, 7, 7, 7, 8, 9, 9, 8, 6, 4, 2, 1]  # traffic by UTC hour
+
+
+def _synth_traces(days: int, now: datetime, rng: random.Random) -> tuple[list[tuple], list[dict]]:
+    """(span rows, message rows): whatsapp.ingest -> whatsapp.route -> agent.call -> agent.invoke -> tool.* traces.
+
+    About 2% of requests fail at ingest, 4% fail in the agent (ERROR on route/agent.call/agent.invoke) and 8% are
+    answered by Layer 0 without the agent. Half way through, the agent's config hash changes: prompts get longer
+    (more input tokens), and the knowledge base is searched less, so the dashboard's change marker has a story.
+    """
+    change_at = now - timedelta(days=days * 0.45)
+    spans, msgs = [], []
+
+    def sid():
+        return f"{rng.getrandbits(64):016x}"
+
+    def add(tid, span_id, parent, name, service, kind, start, dur, status, attrs):
+        spans.append((span_id, tid, parent, name, service, kind, start, round(dur, 2), status,
+                      json.dumps({**attrs, **SYNTH})))
+
+    for d in range(days + 1):  # calendar days touching the last `days` x 24 h; the two end days are partial
+        day0 = (now - timedelta(days=days - d)).replace(hour=0, minute=0, second=0, microsecond=0)
+        for _ in range(rng.randint(35, 65)):
+            hour = rng.choices(range(24), HOUR_WEIGHTS)[0]
+            t0 = day0 + timedelta(hours=hour, minutes=rng.randint(0, 59), seconds=rng.random() * 60)
+            if not now - timedelta(days=days) <= t0 <= now - timedelta(minutes=1):
+                continue
+            after = t0 >= change_at
+            tid, ingest, route = f"{rng.getrandbits(128):032x}", sid(), sid()
+            roll = rng.random()
+            ing_ms = rng.uniform(15, 90)
+            if roll < 0.02:  # signature / payload rejected at ingest
+                add(tid, ingest, None, "whatsapp.ingest", "tt-ingest", "SERVER", t0, ing_ms, "ERROR",
+                    {"messaging.system": "whatsapp", "http.response.status_code": 400})
+                continue
+            add(tid, ingest, None, "whatsapp.ingest", "tt-ingest", "SERVER", t0, ing_ms, "OK",
+                {"messaging.system": "whatsapp", "http.response.status_code": 200})
+            t_route = t0 + timedelta(milliseconds=ing_ms + rng.uniform(40, 400))  # time on the queue
+            if roll < 0.10:  # Layer 0: STOP / START / button taps never reach the model
+                add(tid, route, ingest, "whatsapp.route", "tt-router", "CONSUMER", t_route, rng.uniform(40, 200),
+                    "OK", {"trialtalk.msg_type": "button", "messaging.operation": "process"})
+                continue
+
+            failed = roll < 0.14
+            call, invoke = sid(), sid()
+            if failed:
+                inv_ms = rng.choice([rng.uniform(300, 5000), 29000.0])
+            else:
+                inv_ms = min(max(rng.lognormvariate(7.7, 0.45), 900), 12000) * (1.15 if after else 1.0)
+            t_call = t_route + timedelta(milliseconds=rng.uniform(15, 60))
+            call_ms = inv_ms + rng.uniform(30, 120)
+            status = "ERROR" if failed else "OK"
+            add(tid, route, ingest, "whatsapp.route", "tt-router", "CONSUMER", t_route, call_ms + rng.uniform(60, 220),
+                status, {"trialtalk.msg_type": "text", "messaging.operation": "process"})
+            add(tid, call, route, "agent.call", "tt-router", "CLIENT", t_call, call_ms, status,
+                {"rpc.system": "aws-api", "rpc.service": "bedrock-agentcore"})
+            t_inv = t_call + timedelta(milliseconds=rng.uniform(10, 60))
+            tin = int(min(max(rng.gauss(650, 150), 300), 1100) * (1.25 if after else 1.0))
+            tout = int(min(max(rng.gauss(140, 45), 40), 300))
+            inv_attrs = {"gen_ai.request.model": SYNTH_MODEL,
+                         "trialtalk.config_hash": SYNTH_HASH_AFTER if after else SYNTH_HASH_BEFORE}
+            if not failed:
+                inv_attrs.update({"gen_ai.usage.input_tokens": tin, "gen_ai.usage.output_tokens": tout})
+            add(tid, invoke, call, "agent.invoke", "trial-agent", "SERVER", t_inv, inv_ms, status, inv_attrs)
+
+            tools = 0
+            if not failed:
+                if rng.random() < (0.45 if after else 0.7):  # the knowledge base is searched less after the change
+                    for k in range(rng.randint(1, 2)):
+                        add(tid, sid(), invoke, "tool.search_trial_docs", "trial-agent", "INTERNAL",
+                            t_inv + timedelta(milliseconds=80 + 400 * k), rng.uniform(60, 350), "OK",
+                            {"trialtalk.kb.results": rng.randint(1, 5),
+                             "trialtalk.kb.top_score": round(rng.uniform(0.3, 0.95), 3)})
+                        tools += 1
+                if rng.random() < 0.03:
+                    add(tid, sid(), invoke, "tool.escalate_to_coordinator", "trial-agent", "INTERNAL",
+                        t_inv + timedelta(milliseconds=inv_ms * 0.8), rng.uniform(80, 250), "OK",
+                        {"trialtalk.escalation.severity": "urgent"})
+                    tools += 1
+                body = (SYNTH_REPLY * 20)[:int(tout * rng.uniform(3.2, 4.4))]
+                msgs.append({"created_at": t_route + timedelta(milliseconds=call_ms), "tin": tin, "tout": tout,
+                             "latency_ms": int(call_ms), "tools": tools, "body": body, "session": f"synthetic-{tid[:12]}"})
+    return spans, msgs
+
+
+def seed_telemetry(days: int = 7) -> None:
+    """Replace the synthetic observability data: ~`days` days of traces in trial.telemetry_spans and, for each agent
+    reply, a token-bearing outbound message in trial.communications (the staff API sums tokens from there).
+
+    Every span has attrs "trialtalk.synthetic": true; messages are marked by a session_id of "synthetic-...". No names,
+    phones or message text. Run it as the superuser, like seed(); messages go to the participants that exist.
+    """
+    import psycopg
+    spans, msgs = _synth_traces(days, datetime.now(timezone.utc), random.Random(2026))
+    people = [r["participant_id"] for r in admin_query("SELECT participant_id FROM pii.participants ORDER BY 1")]
+    rng = random.Random(7)
+    with psycopg.connect(pg.admin_dsn) as c:
+        c.execute("""DELETE FROM trial.telemetry_spans WHERE attrs @> '{"trialtalk.synthetic": true}'""")
+        with c.transaction():  # communications is append-only; local throwaway database only, as in wipe()
+            c.execute("ALTER TABLE trial.communications DISABLE TRIGGER communications_no_delete")
+            c.execute("DELETE FROM trial.communications WHERE session_id LIKE 'synthetic-%%'")
+            c.execute("ALTER TABLE trial.communications ENABLE TRIGGER communications_no_delete")
+        with c.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO trial.telemetry_spans (span_id, trace_id, parent_id, name, service, kind, start_ts, "
+                "duration_ms, status, attrs) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) "
+                "ON CONFLICT (span_id) DO NOTHING", spans)
+            if people:
+                cur.executemany(
+                    "INSERT INTO trial.communications (participant_id, channel, direction, msg_type, body_text, "
+                    "session_id, model_id, input_tokens, output_tokens, latency_ms, tool_calls, created_at) "
+                    "VALUES (%s, 'whatsapp', 'outbound', 'text', %s, %s, %s, %s, %s, %s, %s, %s)",
+                    [(rng.choice(people), m["body"], m["session"], SYNTH_MODEL, m["tin"], m["tout"], m["latency_ms"],
+                      m["tools"], m["created_at"]) for m in msgs])
+    print(f"Seeded {len({s[1] for s in spans})} synthetic traces ({len(spans)} spans) over {days} days"
+          + (f" and {len(msgs)} token-bearing messages" if people else " (no participants: no messages)"))
 
 
 def identities() -> dict:
@@ -337,6 +477,9 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--real-agent", action="store_true",
                     help="send web chat to the deployed AgentCore runtime (needs AWS credentials and boto3)")
+    ap.add_argument("--seed-telemetry", action="store_true",
+                    help="add ~7 days of synthetic traces and token usage for the Observability dashboard "
+                         "(re-added after Reset data)")
     args = ap.parse_args()
 
     bin_dir = os.environ.get("TT_PG_BIN")
@@ -348,7 +491,8 @@ def main():
         except ImportError:
             sys.exit("--real-agent needs boto3 in this Python environment.")
 
-    global pg
+    global pg, SEED_TELEMETRY
+    SEED_TELEMETRY = args.seed_telemetry
     print("Starting local PostgreSQL...")
     pg = LocalPostgres(bin_dir)
     try:

@@ -116,7 +116,7 @@ def test_chat_records_token_usage_and_staff_can_see_it(call_staff, call_particip
     call_participant(pid, "POST", "/me/chat", {"text": "Thanks"})
     status, out = call_staff("GET", "/staff/usage", query={"days": "7"})
     assert status == 200 and out["totals"]["calls"] == 2
-    assert out["totals"]["input_tokens"] > 800 and out["totals"]["output_tokens"] > 0
+    assert out["totals"]["input_tokens"] >= 600 and out["totals"]["output_tokens"] > 0
     assert out["by_participant"][0]["participant_id"] == pid and len(out["by_day"]) == 1
     assert call_staff("GET", "/staff/usage", claims=__import__("conftest").OTHER_SITE_CLAIMS)[1]["totals"]["calls"] == 0
     assert call_staff("GET", "/staff/usage", query={"days": "x"})[0] == 400

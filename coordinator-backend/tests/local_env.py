@@ -9,6 +9,7 @@ same login the Lambda would use, so grants and RLS are exercised for real.
 import io
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -17,7 +18,7 @@ import sys
 import tempfile
 import types
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -102,7 +103,8 @@ def wipe(conn) -> None:
     switched off for this one transaction. Local throwaway databases only; never do this to Aurora."""
     with conn.transaction():
         conn.execute("ALTER TABLE trial.clinical_events DISABLE TRIGGER clinical_events_no_truncate")
-        conn.execute("TRUNCATE trial.clinical_events, trial.communications, trial.reminders, pii.participants CASCADE")
+        conn.execute("TRUNCATE trial.clinical_events, trial.communications, trial.reminders, pii.participants,"
+                     " trial.telemetry_spans CASCADE")
         conn.execute("ALTER TABLE trial.clinical_events ENABLE TRIGGER clinical_events_no_truncate")
 
 
@@ -165,8 +167,8 @@ class FakeRdsData:
         conn.close()
 
     def execute_statement(self, resourceArn, secretArn, database, sql, parameters=(), formatRecordsAs=None,
-                          transactionId=None):
-        conn = self.tx.get(transactionId) if transactionId else self._connect(secretArn)
+                          transactionId=None, _conn=None):
+        conn = _conn or (self.tx.get(transactionId) if transactionId else self._connect(secretArn))
         params = {p["name"]: _to_python(p["value"]) for p in parameters}
         pg_sql = _PARAM.sub(lambda m: f"%({m.group(1)})s", sql.replace("%", "%%"))
         with conn.cursor() as cur:
@@ -176,10 +178,22 @@ class FakeRdsData:
                 cols = [d.name for d in cur.description]
                 rows = [{c: _to_json_value(v) for c, v in zip(cols, r)} for r in cur.fetchall()]
                 out["formattedRecords"] = json.dumps(rows)
-        if not transactionId:
+        if not transactionId and _conn is None:
             conn.commit()
             conn.close()
         return out
+
+
+    def batch_execute_statement(self, resourceArn, secretArn, database, sql, parameterSets=()):
+        """What telemetry.persist_spans calls: one statement, many parameter sets, one transaction."""
+        conn = self._connect(secretArn)
+        try:
+            for params in parameterSets:
+                self.execute_statement(resourceArn, secretArn, database, sql, params, _conn=conn)
+            conn.commit()
+        finally:
+            conn.close()
+        return {}
 
 
 class FakeScheduler:
@@ -286,18 +300,50 @@ class FakeWhatsApp:
         return {"messageId": f"wamid.{uuid.uuid4().hex[:12]}"}
 
 
-def fake_usage(text: str, reply: str) -> dict:
-    """Made-up token counts (about 4 characters per token, plus a fixed system prompt) until the real agent reports them."""
-    return {"input_tokens": 420 + len(text) // 4, "output_tokens": max(1, len(reply) // 4), "model_id": "fake-agent-model"}
-
-
-
 class FakeAgentCore:
+    """Mimics the agent's response contract: {"reply", "usage", "trace"} with plausible random numbers.
+
+    usage = {input_tokens 300-900, output_tokens 60-250, latency_ms, model}; trace = {trace_id, spans: [agent.invoke
+    (SERVER) plus 1-3 tool.search_trial_docs children]}. A traceparent in the payload is continued, as the real agent
+    does. `next` (a dict) replaces the next response, e.g. an error reply with no usage; `responses` records them.
+    """
+
+    MODEL = "fake-agent-model"
+
     def __init__(self):
-        self.calls = []
+        self.calls, self.responses, self.next = [], [], None
+
+    def reply_for(self, body: dict) -> str:
+        return f"echo: {body['text']}"
+
+    def build_response(self, body: dict, reply: str) -> dict:
+        rng = random.Random()
+        tin, tout = rng.randint(300, 900), rng.randint(60, 250)
+        m = re.fullmatch(r"00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}", body.get("traceparent") or "")
+        trace_id, remote_parent = (m.group(1), m.group(2)) if m else (f"{rng.getrandbits(128):032x}", None)
+        started = datetime.now(timezone.utc)
+
+        def iso(dt):
+            return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+        root_id, total_ms = f"{rng.getrandbits(64):016x}", rng.randint(900, 3500)
+        spans = [{"span_id": root_id, "parent_id": remote_parent, "name": "agent.invoke", "start": iso(started),
+                  "duration_ms": float(total_ms), "status": "OK", "kind": "SERVER",
+                  "attributes": {"gen_ai.usage.input_tokens": tin, "gen_ai.usage.output_tokens": tout,
+                                 "gen_ai.request.model": self.MODEL, "trialtalk.config_hash": "fake0000cafe"}}]
+        for i in range(rng.randint(1, 3)):
+            spans.append({"span_id": f"{rng.getrandbits(64):016x}", "parent_id": root_id,
+                          "name": "tool.search_trial_docs", "start": iso(started + timedelta(milliseconds=50 + 100 * i)),
+                          "duration_ms": float(rng.randint(40, 300)), "status": "OK", "kind": "INTERNAL",
+                          "attributes": {"trialtalk.kb.results": rng.randint(1, 5),
+                                         "trialtalk.kb.top_score": round(rng.uniform(0.3, 0.95), 3)}})
+        return {"reply": reply, "usage": {"input_tokens": tin, "output_tokens": tout, "latency_ms": total_ms,
+                                          "model": self.MODEL},
+                "trace": {"trace_id": trace_id, "spans": spans}}
 
     def invoke_agent_runtime(self, agentRuntimeArn, runtimeSessionId, payload):
         body = json.loads(payload)
         self.calls.append({"session": runtimeSessionId, **body})
-        reply = f"echo: {body['text']}"
-        return {"response": io.BytesIO(json.dumps({"reply": reply, "usage": fake_usage(body["text"], reply)}).encode())}
+        out, self.next = self.next or self.build_response(body, self.reply_for(body)), None
+        self.responses.append(out)
+        return {"response": io.BytesIO(json.dumps(out).encode())}
