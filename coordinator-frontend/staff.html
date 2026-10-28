@@ -34,7 +34,7 @@
     <main id="main" tabindex="-1">
       <div class="panel" data-signed-out>
         <div class="empty"><span data-icon="user"></span><b>Sign in to the staff portal</b>
-          <p>Choose a coordinator or PI from the account menu at the top right. In production this is the staff Cognito pool with MFA.</p></div>
+          <p>Use your phone number and password.</p><a class="btn primary" href="/">Go to sign in</a></div>
       </div>
 
       <div class="hidden" data-signed-in>
@@ -555,8 +555,8 @@ function undoReply(id) {
 // Leaving the page mid-countdown still sends: the click was a decision, only the undo window is cut short.
 addEventListener('pagehide', () => {
   for (const [id, p] of Object.entries(state.pending)) {
-    fetch(`/api/staff/requests/${id}/reply`, { method: 'POST', keepalive: true, body: JSON.stringify({ text: p.text }),
-      headers: { 'X-Dev-Identity': `staff:${encodeURIComponent(TT.user)}`, 'Content-Type': 'application/json' } });
+    fetch(`${CONFIG.apiBase.staff}/staff/requests/${id}/reply`, { method: 'POST', keepalive: true, body: JSON.stringify({ text: p.text }),
+      headers: { ...Auth.headersNow(), 'Content-Type': 'application/json' } });
   }
 });
 

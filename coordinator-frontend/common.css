@@ -738,6 +738,42 @@ dialog.sheet.instant, dialog.sheet.instant::backdrop { transition: none; }
 
 /* ---------------------------------------------------------------- landing */
 .choose { display: grid; gap: var(--s-section); grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+/* ---------------------------------------------------------------- sign-in: one calm card, the same tokens as the portals */
+body:has(> .signin) { display: flex; flex-direction: column; }
+.signin { flex: 1; display: grid; justify-items: center; align-content: start; padding: clamp(32px, 9vh, 96px) var(--s-page) var(--s-section); }
+.signin-card { width: min(100%, 400px); display: grid; gap: 24px; padding: var(--s-panel); border-radius: var(--r-lg);
+  background: var(--surface); box-shadow: var(--shadow-sm), 0 0 0 1px var(--border); }
+.signin-head { display: grid; gap: 8px; }
+.signin-head h1 { font-size: var(--fs-h1); text-wrap: balance; }
+.signin-head p { color: var(--text-2); text-wrap: pretty; }
+.signin-note { padding: 10px 14px; border-radius: var(--r-sm); background: var(--surface-2); font-size: var(--fs-meta); }
+.signin-form { display: grid; gap: 20px; }
+.signin-form .field { display: grid; gap: 8px; }
+.signin-form input { width: 100%; }
+.signin-hint { font-size: var(--fs-meta); color: var(--text-2); }
+.signin-hint:empty { display: none; }
+.signin-err { font-size: var(--fs-meta); color: var(--bad); text-wrap: pretty; }
+.signin-submit { width: 100%; }
+.signin-form .ghost { justify-self: center; }
+/* The show / hide control sits inside the password field, on its trailing edge. */
+.pw { position: relative; }
+.pw input { padding-inline-end: 76px; }
+.pw-toggle { position: absolute; inset-block: 4px; inset-inline-end: 4px; min-height: 0; height: auto; padding: 0 12px;
+  background: transparent; box-shadow: none; color: var(--text-2); font-size: var(--fs-meta); }
+.pw-toggle:hover { background: var(--surface-3); color: var(--text); box-shadow: none; }
+.signin-demo { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: -8px; font-size: var(--fs-meta); color: var(--text-2); }
+.link-btn { min-height: 0; height: auto; padding: 0; background: none; box-shadow: none; color: var(--accent); font-size: inherit;
+  text-decoration: underline; text-underline-offset: 2px; }
+.link-btn:hover { background: none; box-shadow: none; color: var(--text); }
+.signin-help { padding-top: 20px; border-top: 1px solid var(--border); font-size: var(--fs-meta); color: var(--text-2); }
+@media (max-width: 560px) { .signin { padding-inline: 16px; } .signin-card { padding: 20px; } }
+
+/* Hosted account menu: who you are, then Sign out. */
+.menu-who { display: flex; align-items: center; gap: 12px; padding: 8px 12px; }
+.menu-who .avatar { width: 32px; height: 32px; font-size: var(--fs-xs); }
+.menu-who .mi-text { display: grid; gap: 2px; min-width: 0; }
+.menu-who .mi-text span { font-size: var(--fs-xs); color: var(--text-2); }
 .card-link { display: grid; gap: 12px; align-content: start; padding: var(--s-panel); border-radius: var(--r-lg); background: var(--surface); color: var(--text); text-decoration: none;
   box-shadow: var(--shadow-sm), 0 0 0 1px var(--border); transition-property: box-shadow, translate; transition-duration: var(--dur-enter); transition-timing-function: var(--ease-out); }
 .card-link h2 { display: flex; align-items: center; gap: 10px; }

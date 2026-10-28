@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>try{var t=localStorage.getItem("tt.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
-<title>TrialTalk · Local portals</title>
+<title>Sign in · TrialTalk</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&display=swap">
@@ -13,28 +13,177 @@
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="app-header" id="appHeader"></header>
-<main id="main" class="site-main" tabindex="-1">
-  <div class="page-head">
-    <div>
-      <h1>Choose a portal</h1>
-      <p>Each portal is its own site, as it will be deployed. Everything here is synthetic and deleted when the dev server stops.</p>
+<main id="main" class="signin" tabindex="-1">
+  <section class="signin-card" aria-labelledby="signinTitle">
+    <div class="signin-head">
+      <h1 id="signinTitle">Sign in</h1>
+      <p id="signinLede">For study participants and study teams. Use the phone number your study site has for you.</p>
     </div>
-  </div>
-  <div class="choose">
-    <a class="card-link" href="/staff">
-      <h2><span data-icon="users"></span>Staff portal</h2>
-      <p>For coordinators and PIs: emergency alerts, participants, reminders and dosing, requests, team accounts, token usage and observability.</p>
-      <span class="go">Open the staff portal <span data-icon="arrow" class="sm"></span></span>
-    </a>
-    <a class="card-link" href="/participant">
-      <h2><span data-icon="message"></span>Participant site</h2>
-      <p>For participants: one-press emergency help, medication schedule, requests to the study team and chat.</p>
-      <span class="go">Open the participant site <span data-icon="arrow" class="sm"></span></span>
-    </a>
-  </div>
+    <p class="signin-note" id="signinNote" role="status" hidden></p>
+
+    <!-- Step 1: phone number and password. Step 2 (hosted only, when Cognito asks): a new password or a code. -->
+    <form class="signin-form" id="signinForm" novalidate>
+      <div class="field">
+        <label for="phone">Phone number</label>
+        <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="username" required aria-describedby="signinErr">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <div class="pw">
+          <input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="signinErr">
+          <button type="button" class="pw-toggle" aria-controls="password" aria-pressed="false">Show</button>
+        </div>
+      </div>
+      <p class="signin-err" id="signinErr" role="alert" hidden></p>
+      <button class="primary signin-submit" type="submit">Sign in</button>
+    </form>
+
+    <form class="signin-form" id="stepForm" novalidate hidden>
+      <div class="field">
+        <label for="stepInput" id="stepLabel"></label>
+        <input id="stepInput" name="answer" required aria-describedby="stepHint stepErr">
+        <p class="signin-hint" id="stepHint"></p>
+      </div>
+      <p class="signin-err" id="stepErr" role="alert" hidden></p>
+      <button class="primary signin-submit" type="submit" id="stepSubmit"></button>
+      <button type="button" class="ghost" id="stepBack">Back to sign in</button>
+    </form>
+
+    <div class="signin-demo" id="signinDemo" hidden>
+      <span>Demo account filled in.</span>
+      <button type="button" class="link-btn" id="clearDemo">Clear</button>
+    </div>
+    <p class="signin-help">Forgot your password? Contact your study site.</p>
+  </section>
 </main>
 <footer class="site-footer" id="appFooter"></footer>
 <script src="/ui/common.js"></script>
-<script>injectAssets(); renderChrome('home');</script>
+<script>
+injectAssets(); renderChrome('home');
+
+const params = new URLSearchParams(location.search);
+const NOTES = { 'signed-out': "You're signed out.", expired: 'Your session ended. Sign in again to continue.' };
+// Where to go once signed in: back to the page that sent you here, if it belongs to your portal.
+const destination = portal => {
+  const next = params.get('next') || '';
+  return next.startsWith(`/${portal}`) ? next : `/${portal}`;
+};
+
+// Already signed in (and not just signed out): straight to your portal, unless you asked for the other one.
+const current = Auth.session();
+const wanted = Object.keys(PORTALS).find(p => (params.get('next') || '').startsWith(`/${p}`));
+const note = Object.keys(NOTES).find(k => params.has(k));
+if (current?.portal && !note && (!wanted || wanted === current.portal)) location.replace(destination(current.portal));
+if (current?.portal && wanted && wanted !== current.portal) {
+  NOTES.other = `You're signed in to the ${PORTALS[current.portal].toLowerCase()}. Sign in with a ${wanted} account to open the ${PORTALS[wanted].toLowerCase()}.`;
+}
+const shown = note || (NOTES.other && 'other');
+if (shown) { $('#signinNote').textContent = NOTES[shown]; $('#signinNote').hidden = false; }
+
+// The default login, filled in so the demo always opens with one click.
+function fillDemo() {
+  if (!CONFIG.demo?.phone) return;
+  $('#phone').value = CONFIG.demo.phone; $('#password').value = CONFIG.demo.password;
+  $('#signinDemo').hidden = false;
+}
+fillDemo();
+$('#clearDemo').onclick = () => {
+  $('#phone').value = ''; $('#password').value = ''; $('#signinDemo').hidden = true; $('#phone').focus();
+};
+['phone', 'password'].forEach(id => $('#' + id).addEventListener('input', () => {
+  $('#signinDemo').hidden = true; showError('signinErr', '');
+}));
+
+// Show / hide the password. The button says what it will do; aria-pressed says whether the password is showing.
+$('.pw-toggle').onclick = e => {
+  const showing = $('#password').type === 'text';
+  $('#password').type = showing ? 'password' : 'text';
+  e.currentTarget.textContent = showing ? 'Show' : 'Hide';
+  e.currentTarget.setAttribute('aria-pressed', String(!showing));
+};
+
+const MESSAGES = {
+  bad_credentials: "That phone number and password don't match an account. Check both and try again.",
+  network: "Can't reach TrialTalk right now. Check your connection and try again.",
+  too_many: 'Too many attempts. Wait a few minutes, then try again.',
+  reset_required: 'Your password needs to be reset. Contact your study site.',
+  mfa_setup: 'Your account needs an authenticator app set up before you can sign in here. Contact your study team.',
+  bad_code: "That code didn't work. Check it and try again, or wait for a new one.",
+  weak_password: 'Choose a longer password: at least 12 characters, with upper and lower case letters, a number and a symbol.',
+  failed: "Something went wrong signing you in. Try again.",
+};
+function showError(id, code, field) {
+  const el = $('#' + id);
+  el.textContent = MESSAGES[code] || code || ''; el.hidden = !code;
+  $$('input', el.closest('form')).forEach(i => i.removeAttribute('aria-invalid'));
+  if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
+}
+function busy(form, on, label) {
+  const b = $('.signin-submit', form);
+  b.disabled = on; form.setAttribute('aria-busy', String(on));
+  if (label) b.textContent = label;
+}
+
+let pending = null;   // a Cognito challenge waiting for an answer
+$('#signinForm').onsubmit = async e => {
+  e.preventDefault();
+  const phone = $('#phone').value.trim(), password = $('#password').value;
+  if (!phone) return showError('signinErr', 'Enter your phone number.', $('#phone'));
+  if (!password) return showError('signinErr', 'Enter your password.', $('#password'));
+  showError('signinErr', '');
+  busy(e.target, true, 'Signing in…');
+  try {
+    const out = await Auth.signIn(phone, password);
+    if (out.challenge) return askStep(out);
+    location.replace(destination(out.portal));
+  } catch (err) {
+    showError('signinErr', err.code || 'failed', err.code === 'bad_credentials' ? $('#password') : null);
+  } finally { busy(e.target, false, 'Sign in'); }
+};
+
+// Cognito's extra steps on a hosted build: a first-time new password, or a code from an app or a text message.
+const STEPS = {
+  NEW_PASSWORD_REQUIRED: { title: 'Choose a new password', lede: 'This is your first sign-in. Choose the password you will use from now on.',
+    label: 'New password', type: 'password', autocomplete: 'new-password', submit: 'Save and sign in',
+    hint: 'At least 12 characters, with upper and lower case letters, a number and a symbol.' },
+  SOFTWARE_TOKEN_MFA: { title: 'Enter your code', lede: 'Open your authenticator app and enter the 6-digit code for TrialTalk.',
+    label: 'Code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', submit: 'Verify and sign in', hint: '' },
+  SMS_MFA: { title: 'Enter your code', lede: 'We sent a 6-digit code to your phone.',
+    label: 'Code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', submit: 'Verify and sign in', hint: '' },
+};
+function askStep(step) {
+  const s = STEPS[step.challenge];
+  if (!s) return showError('signinErr', 'failed');
+  pending = step;
+  $('#signinTitle').textContent = s.title; $('#signinLede').textContent = s.lede;
+  $('#stepLabel').textContent = s.label; $('#stepHint').textContent = s.hint; $('#stepHint').hidden = !s.hint;
+  Object.assign($('#stepInput'), { type: s.type, value: '', autocomplete: s.autocomplete });
+  $('#stepInput').inputMode = s.inputmode || '';
+  $('#stepSubmit').textContent = s.submit;
+  $('#signinForm').hidden = true; $('#signinDemo').hidden = true; $('#signinNote').hidden = true;
+  $('#stepForm').hidden = false; showError('stepErr', '');
+  $('#stepInput').focus();
+}
+$('#stepForm').onsubmit = async e => {
+  e.preventDefault();
+  const answer = $('#stepInput').value.trim();
+  if (!answer) return showError('stepErr', `Enter your ${$('#stepLabel').textContent.toLowerCase()}.`, $('#stepInput'));
+  busy(e.target, true);
+  try {
+    const out = await Auth.respond(pending, answer);
+    if (out.challenge) return askStep(out);
+    location.replace(destination(out.portal));
+  } catch (err) {
+    showError('stepErr', err.code || 'failed', $('#stepInput'));
+  } finally { busy(e.target, false, STEPS[pending?.challenge]?.submit); }
+};
+$('#stepBack').onclick = () => {
+  pending = null;
+  $('#stepForm').hidden = true; $('#signinForm').hidden = false;
+  $('#signinTitle').textContent = 'Sign in';
+  $('#signinLede').textContent = 'For study participants and study teams. Use the phone number your study site has for you.';
+  $('#password').value = ''; $('#password').focus();
+};
+</script>
 </body>
 </html>

@@ -1,6 +1,6 @@
-// Shared helpers for the two portals and the landing page.
-// "Sign-in" here is a dev stand-in for Cognito: the chosen user goes in the X-Dev-Identity header and the
-// dev server turns it into the claims the JWT authorizer would pass. Real portals swap this for Cognito tokens.
+// Shared helpers for the two portals and the sign-in page.
+// Sign-in (see Auth below) takes a phone number and password. On the local dev server it is checked by /dev/sign-in
+// and requests carry X-Dev-Identity; on a hosted build it goes to Cognito and requests carry the ID token.
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -8,11 +8,28 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 
 const TT = { portal: null, user: null, identity: null, onSignIn: null };
 const PORTALS = { staff: 'Staff portal', participant: 'Participant site' };
-const PORTAL_NAMES = { ...PORTALS, home: 'Local portals' };
+const PORTAL_NAMES = { ...PORTALS, home: 'Sign in' };
 
 function store(k, v) {
   try { if (v !== undefined) localStorage.setItem('tt.' + k, v); return localStorage.getItem('tt.' + k); } catch { return null; }
 }
+
+// ------------------------------------------------------------ where the pages run
+// LOCAL: the dev server (coordinator-backend/devserver) on this machine, with /api and /dev on the same origin.
+// Otherwise a hosted build (Amplify or any static host) talking to what is deployed in AWS.
+const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+const CONFIG = {
+  // Per portal. The participant API is not deployed yet.
+  apiBase: LOCAL ? { staff: '/api', participant: '/api' }
+    : { staff: 'https://ca0jle1s2g.execute-api.us-east-1.amazonaws.com', participant: '' },
+  cognitoRegion: 'us-east-1',
+  // Cognito app clients that allow USER_PASSWORD_AUTH with the phone number as the sign-in name. Empty = not deployed.
+  clients: { staff: '6tfennq5nb6hu8i50u2cvh3mo1', participant: '' },
+  // The default login the sign-in page fills in. The dev server always accepts it (Jamie Fox, PI at every site).
+  // Hosted, it works once a Cognito user with this phone number and password exists. Anyone can read it here,
+  // so it opens the portal to anyone: remove it before real participant data is reachable.
+  demo: { phone: '+1 555 010 0100', password: 'TrialTalk-Demo-2026!' },
+};
 
 // ------------------------------------------------------------ brand + icons
 // The mark: a speech bubble (TrialTalk is a conversation) carrying a pulse line (it is about health).
@@ -127,24 +144,25 @@ function renderChrome(portal) {
   if (side && !$('.sidebar-head', side)) {
     side.id = 'sidebar';
     side.insertAdjacentHTML('afterbegin', `<div class="sidebar-head">
-      <a class="brand" href="/" aria-label="TrialTalk, all portals">${BRAND}</a>
+      <a class="brand" href="/${portal}" aria-label="TrialTalk, ${esc(PORTAL_NAMES[portal])} home">${BRAND}</a>
       <button type="button" class="icon-btn nav-toggle" id="navToggle" aria-controls="sidebar">${icon('sidebar')}</button></div>`);
     $$('.nav a', side).forEach(a => { a.title = $('.nl', a)?.textContent || ''; });
   }
   if (h) h.innerHTML = `<div class="inner">
       ${side ? `<button type="button" class="icon-btn nav-open" id="navOpen" aria-controls="sidebar" aria-label="Open navigation" title="Open navigation">${icon('sidebar')}</button>
         <nav class="crumbs" aria-label="Breadcrumb"><ol id="crumbs"></ol></nav>`
-        : `<a class="brand" href="/" aria-label="TrialTalk, all portals">${BRAND}</a>`}
+        : `<a class="brand" href="/" aria-label="TrialTalk">${BRAND}</a>`}
       <span class="spacer"></span>
-      <nav class="portal-tabs" aria-label="Portals">${PORTAL_TABS.map(([k, u, ic, label]) =>
-        `<a href="${u}" ${k === portal ? 'aria-current="page"' : ''}>${icon(k === portal ? ic + '-fill' : ic)}<span>${label}</span></a>`).join('')}</nav>
+      ${LOCAL && PORTALS[portal] ? `<nav class="portal-tabs" aria-label="Portals">${PORTAL_TABS.map(([k, u, ic, label]) =>
+        `<a href="${u}" ${k === portal ? 'aria-current="page"' : ''}>${icon(k === portal ? ic + '-fill' : ic)}<span>${label}</span></a>`).join('')}</nav>` : ''}
       <div data-theme-toggle></div>
       ${PORTALS[portal] ? `<button type="button" class="account" id="accountBtn" popovertarget="accountMenu"></button>
         <div popover id="accountMenu" class="menu account-menu" aria-label="Account"></div>` : ''}
     </div>`;
   if (side && !$('.scrim')) document.body.insertAdjacentHTML('beforeend', '<button type="button" class="scrim" tabindex="-1" aria-hidden="true"></button>');
   const f = $('#appFooter');
-  if (f) f.innerHTML = `<div class="inner"><span>TrialTalk · local development build</span><span>Synthetic data only</span></div>`;
+  if (f) f.innerHTML = LOCAL ? `<div class="inner"><span>TrialTalk · local development build</span><span>Synthetic data only</span></div>`
+    : `<div class="inner"><span>TrialTalk</span><span>Questions about your account? Contact your study site.</span></div>`;
   Nav.init(); renderThemeControls(); renderAccount();
 }
 
@@ -200,7 +218,7 @@ function renderAccount() {
   b.innerHTML = name ? `<span class="avatar" aria-hidden="true">${esc(initials(name))}</span><span class="name">${esc(name)}</span>${icon('caret-updown', 'sm')}`
     : `${icon('user', 'sm')}<span class="name">Sign in</span>${icon('caret-updown', 'sm')}`;
   b.setAttribute('aria-label', name ? `Signed in as ${name}. Account and settings` : 'Sign in');
-  b.title = name ? `${name} · ${identitySub(u)}` : 'Choose an account';
+  b.title = name ? `${name} · ${identitySub(u)}` : 'Sign in';
   renderAccountMenu();
 }
 
@@ -212,11 +230,20 @@ function identitySub(u) {
   return [role, sites].filter(Boolean).join(' · ');
 }
 
+// Hosted: who you are and Sign out. Local: also switch between the dev server's accounts and reload test data.
 function renderAccountMenu() {
   const m = $('#accountMenu'); if (!m) return;
+  const signOut = `<button type="button" class="menu-item" data-sign-out>${icon('sign-out')}<span class="mi-text"><b>Sign out</b></span></button>`;
+  if (!LOCAL) {
+    const u = TT.identity, name = u ? (u.full_name || u.name || u.username) : '';
+    m.innerHTML = `<div class="menu-who"><span class="avatar" aria-hidden="true">${esc(initials(name))}</span>
+      <span class="mi-text"><b>${esc(name)}</b><span>${esc(identitySub(u))}</span></span></div><div class="menu-sep"></div>${signOut}`;
+    $('[data-sign-out]', m).onclick = () => Auth.signOut();
+    return;
+  }
   const list = TT.identities || [], set = loadedDataset();
   m.innerHTML = `
-    <div class="menu-label">${TT.portal === 'participant' ? 'Participants' : 'Staff accounts'}<span class="tag">Local dev</span></div>
+    <div class="menu-label">Switch account<span class="tag">Local dev</span></div>
     <div class="menu-list">${list.map(u => {
       const name = u.full_name || u.name || u.username, on = u.username === TT.user, off = u.enabled === false;
       return `<button type="button" class="menu-item" data-as="${esc(u.username)}" aria-pressed="${on}" ${off ? 'aria-disabled="true"' : ''}>
@@ -224,7 +251,7 @@ function renderAccountMenu() {
         <span class="mi-text"><b>${esc(name)}</b><span>${esc(identitySub(u))}</span></span>
         ${off ? chip('disabled') : on ? icon('check', 'sm mi-check') : ''}</button>`;
     }).join('')}</div>
-    ${TT.user ? `<button type="button" class="menu-item" data-as="">${icon('sign-out')}<span class="mi-text"><b>Sign out</b></span></button>` : ''}
+    ${signOut}
     <div class="menu-sep"></div>
     <div class="menu-label">Test data</div>
     <div class="menu-pad"><div class="tabs full" role="group" aria-label="Test data">
@@ -233,9 +260,10 @@ function renderAccountMenu() {
   $$('[data-as]', m).forEach(b => {
     b.onclick = () => {
       if (b.getAttribute('aria-disabled') === 'true') return toast('This account is disabled. Enable it on the Team page first.', true);
-      m.hidePopover(); signInAs(b.dataset.as || null);
+      m.hidePopover(); signInAs(b.dataset.as);
     };
   });
+  $('[data-sign-out]', m).onclick = () => Auth.signOut();
   $$('[data-dataset]', m).forEach(b => { b.onclick = () => { m.hidePopover(); switchDataset(b.dataset.dataset); }; });
 }
 
@@ -248,7 +276,7 @@ function loadedDataset() {
 function signInAs(username) {
   TT.user = username;
   TT.identity = (TT.identities || []).find(u => u.username === username) || null;
-  store('user.' + TT.portal, username || '');
+  Auth.save({ portal: TT.portal, user: username });
   renderAccount(); signedIn();
   $('#accountBtn')?.focus();
 }
@@ -364,12 +392,12 @@ function ask({ title, message = '', input = null, confirm = 'Confirm', tone = 'p
 const pathSeg = v => encodeURIComponent(v).replace(/%40/g, '@').replace(/%2B/g, '+');
 // opts.quiet: background polling. No error toast, so widgets can refresh freely.
 async function api(method, path, body, opts = {}) {
-  if (!TT.user) { if (!opts.quiet) toast('Sign in first: choose an account from the menu at the top right.', true); throw new Error('signed out'); }
-  const identity = `${TT.portal}:${encodeURIComponent(TT.user)}`;
-  const headers = { 'X-Dev-Identity': identity };
+  if (!TT.user) { if (!opts.quiet) toast('Sign in first.', true); throw new Error('signed out'); }
+  const headers = await Auth.headers();
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const res = await fetch('/api' + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+  const res = await fetch(CONFIG.apiBase[TT.portal] + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !LOCAL) { Auth.signOut('expired'); throw new Error('signed out'); }
   if (!res.ok) {
     if (!opts.quiet) toast(`Unable to complete that (${res.status}). ${data.error || data.message || 'Try again.'}`, true);
     throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status });
@@ -489,11 +517,116 @@ function formData(form) {
   return out;
 }
 
-// ------------------------------------------------------------ dev sign-in (stands in for Cognito)
+// ------------------------------------------------------------ sign-in and sign-out
+// One sign-in for both portals: a phone number and password open whichever portal the account belongs to.
+// The session lives in localStorage as tt.session = { portal, user, name?, groups?, site_ids?, clientId?, id?, refresh?, exp? }.
+const Auth = {
+  session() { try { return JSON.parse(store('session') || 'null'); } catch { return null; } },
+  save(s) { store('session', s ? JSON.stringify(s) : ''); },
+
+  // Resolves to { portal } when signed in, or { challenge, ... } when Cognito needs one more step (pass it to respond).
+  // Rejects with an Error whose .code is bad_credentials, mfa_setup, reset_required, too_many or network.
+  async signIn(phone, password) {
+    if (LOCAL) {
+      const res = await fetch('/dev/sign-in', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password }) }).catch(() => null);
+      if (!res) throw authError('network');
+      if (!res.ok) throw authError('bad_credentials');
+      const who = await res.json();
+      this.save({ portal: who.portal, user: who.username });
+      return { portal: who.portal };
+    }
+    const username = e164(phone);
+    for (const portal of Object.keys(PORTALS)) {
+      const clientId = CONFIG.clients[portal]; if (!clientId) continue;
+      try {
+        const r = await cognito('InitiateAuth', { ClientId: clientId, AuthFlow: 'USER_PASSWORD_AUTH',
+          AuthParameters: { USERNAME: username, PASSWORD: password } });
+        return this.finish(r, { portal, clientId, username });
+      } catch (e) { if (e.code !== 'bad_credentials') throw e; }   // not this pool: try the next one
+    }
+    throw authError('bad_credentials');
+  },
+
+  // The answer to a challenge: a new password (NEW_PASSWORD_REQUIRED) or a code (SOFTWARE_TOKEN_MFA, SMS_MFA).
+  async respond(step, answer) {
+    const key = { NEW_PASSWORD_REQUIRED: 'NEW_PASSWORD', SOFTWARE_TOKEN_MFA: 'SOFTWARE_TOKEN_MFA_CODE', SMS_MFA: 'SMS_MFA_CODE' }[step.challenge];
+    const r = await cognito('RespondToAuthChallenge', { ClientId: step.clientId, ChallengeName: step.challenge, Session: step.session,
+      ChallengeResponses: { USERNAME: step.username, [key]: answer } });
+    return this.finish(r, step);
+  },
+
+  finish(r, ctx) {
+    if (r.ChallengeName === 'MFA_SETUP') throw authError('mfa_setup');
+    if (r.ChallengeName) return { ...ctx, challenge: r.ChallengeName, session: r.Session,
+      username: r.ChallengeParameters?.USER_ID_FOR_SRP || ctx.username };
+    this.keep(ctx, r.AuthenticationResult);
+    return { portal: ctx.portal };
+  },
+
+  keep(ctx, result, refresh = result.RefreshToken) {
+    const c = jwtClaims(result.IdToken);
+    this.save({ portal: ctx.portal, clientId: ctx.clientId, id: result.IdToken, refresh, exp: c.exp,
+      user: c.email || c['custom:participant_id'] || c['cognito:username'], name: c.name, groups: c['cognito:groups'] || [],
+      site_ids: c['custom:site_ids'] || '' });
+  },
+
+  // Headers that identify the signed-in person to the API, refreshing a hosted token that is about to expire.
+  async headers() {
+    const s = this.session();
+    if (s && !LOCAL && s.exp - Date.now() / 1000 < 60) {
+      const r = await cognito('InitiateAuth', { ClientId: s.clientId, AuthFlow: 'REFRESH_TOKEN_AUTH',
+        AuthParameters: { REFRESH_TOKEN: s.refresh } }).catch(() => null);
+      if (!r) { this.signOut('expired'); throw authError('expired'); }
+      this.keep(s, r.AuthenticationResult, s.refresh);
+    }
+    return this.headersNow();
+  },
+  // The same, without a refresh: for a request that must go out right now (a send on page leave).
+  headersNow() {
+    if (LOCAL) return { 'X-Dev-Identity': `${TT.portal}:${encodeURIComponent(TT.user || '')}` };
+    const s = this.session();
+    return s?.id ? { Authorization: `Bearer ${s.id}` } : {};
+  },
+
+  // Forgets the session (and, hosted, revokes the refresh token) and goes back to the sign-in page.
+  async signOut(reason = 'signed-out') {
+    const s = this.session();
+    this.save(null);
+    if (s?.refresh && !LOCAL) await cognito('RevokeToken', { Token: s.refresh, ClientId: s.clientId }).catch(() => {});
+    location.href = `/?${reason}`;
+  },
+};
+
+const authError = code => Object.assign(new Error(code), { code });
+// What the person typed, as +<digits>. Ten digits are read as a US number.
+function e164(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return '+' + (digits.length === 10 ? '1' + digits : digits);
+}
+function jwtClaims(token) {
+  try { return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch { return {}; }
+}
+// Cognito's public sign-in API, called straight from the browser (app clients without a secret need no AWS keys).
+async function cognito(action, payload) {
+  const res = await fetch(`https://cognito-idp.${CONFIG.cognitoRegion}.amazonaws.com/`, { method: 'POST',
+    headers: { 'Content-Type': 'application/x-amz-json-1.1', 'X-Amz-Target': `AWSCognitoIdentityProviderService.${action}` },
+    body: JSON.stringify(payload) }).catch(() => null);
+  if (!res) throw authError('network');
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) return data;
+  const type = String(data.__type || '').split('#').pop();
+  throw authError({ NotAuthorizedException: 'bad_credentials', UserNotFoundException: 'bad_credentials',
+    PasswordResetRequiredException: 'reset_required', TooManyRequestsException: 'too_many', LimitExceededException: 'too_many',
+    TooManyFailedAttemptsException: 'too_many', CodeMismatchException: 'bad_code', ExpiredCodeException: 'bad_code',
+    InvalidPasswordException: 'weak_password' }[type] || 'failed');
+}
+
+// ------------------------------------------------------------ local accounts (dev server only)
 async function reloadIdentities() {
   const ids = await dev('GET', '/dev/identities');
   const list = ids[TT.portal] || [];
-  const keep = TT.user || store('user.' + TT.portal);
+  const s = Auth.session(), keep = TT.user || (s?.portal === TT.portal ? s.user : null);
   TT.identities = list;
   TT.user = list.some(u => u.username === keep && u.enabled !== false) ? keep : null;
   TT.identity = list.find(u => u.username === TT.user) || null;
@@ -553,11 +686,22 @@ async function switchDataset(set) {
 }
 
 // Call once per page: renders the shared header, loads the accounts, and calls onSignIn(user|null) on every change.
+// Signed out, or signed in to the other portal: back to the sign-in page, which returns here afterwards.
 async function initPortal(portal, onSignIn) {
   TT.portal = portal; TT.onSignIn = onSignIn;
+  const s = Auth.session();
+  const toSignIn = () => location.replace(`/?next=${encodeURIComponent(location.pathname + location.hash)}`);
+  if (s?.portal !== portal) return toSignIn();
   injectAssets();
   renderChrome(portal);
-  await reloadIdentities();
+  if (LOCAL) {
+    await reloadIdentities();
+    if (!TT.user) { Auth.save(null); return toSignIn(); }   // the account is gone (data reset) or disabled
+  } else {
+    TT.user = s.user; TT.identities = [];
+    TT.identity = { username: s.user, name: s.name, groups: s.groups, site_ids: s.site_ids };
+    renderAccount();
+  }
   signedIn();
 }
 

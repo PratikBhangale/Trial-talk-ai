@@ -20,6 +20,7 @@ Synthetic data only. Everything is deleted when the server stops.
 """
 
 import argparse
+import hmac
 import io
 import json
 import os
@@ -65,6 +66,13 @@ SEED_STAFF = [
     {"email": "coordinator@lakeview-health.org", "name": "Morgan Diaz", "role": "coordinator",
      "site_ids": ["LAKEVIEW"], "study_ids": ["KOA-301"]},
 ]
+
+# Dev sign-in: phone number + password, the way the hosted pages sign people in. Every local account shares one
+# password. Participants sign in with the phone number on their record; staff accounts carry no phone number in Cognito,
+# so the local staff get synthetic 555 numbers here. The first one is the default demo login the sign-in page fills in.
+DEV_PASSWORD = "TrialTalk-Demo-2026!"
+DEV_STAFF_PHONES = {"+15550100100": BOOTSTRAP_STAFF["email"], "+15550100101": SEED_STAFF[0]["email"],
+                    "+15550100102": SEED_STAFF[1]["email"], "+15550100103": SEED_STAFF[2]["email"]}
 
 fakes = types.SimpleNamespace()
 # Requests are served on threads (browsers open idle speculative connections that would otherwise stall a
@@ -209,6 +217,26 @@ def seed() -> None:
           f"{', '.join(p['participant_id'] for p in participants)} (db/03_seed.sql)")
 
 
+def e164(phone) -> str:
+    """Whatever the person typed, as +<digits>. Ten digits are read as a US number."""
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    return "+" + ("1" + digits if len(digits) == 10 else digits)
+
+
+def dev_sign_in(phone, password) -> dict | None:
+    """The account this phone number and password open, or None. Disabled accounts are refused, as Cognito would."""
+    if not hmac.compare_digest(str(password or ""), DEV_PASSWORD):
+        return None
+    number, sp, pp = e164(phone), fakes.staff_pool, fakes.participant_pool
+    staff_user = DEV_STAFF_PHONES.get(number)
+    if staff_user in sp.users and staff_user not in sp.disabled:
+        return {"portal": "staff", "username": staff_user}
+    for user, attrs in pp.users.items():
+        if attrs.get("phone_number") == number and user not in pp.disabled:
+            return {"portal": "participant", "username": user}
+    return None
+
+
 def identities() -> dict:
     """Who each portal's dev sign-in can pick. Mirrors who Cognito would let through, plus locked-out accounts."""
     sp, pp = fakes.staff_pool, fakes.participant_pool
@@ -308,6 +336,13 @@ class Handler(BaseHTTPRequestHandler):
     def _dev_locked(self, path: str, body: bytes | None):
         if path == "/dev/identities" and self.command == "GET":
             return self._send(200, identities())
+        if path == "/dev/sign-in" and self.command == "POST":
+            try:
+                req = json.loads(body or b"{}")
+            except ValueError:
+                req = {}
+            who = dev_sign_in(req.get("phone"), req.get("password"))
+            return self._send(200, who) if who else self._send(401, {"error": "bad_credentials"})
         if path == "/dev/outbox" and self.command == "GET":
             sp = fakes.staff_pool
             return self._send(200, {

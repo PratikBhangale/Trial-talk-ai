@@ -196,7 +196,7 @@ The pages live in [`../coordinator-frontend`](../coordinator-frontend): plain HT
 
 What would have gone to AWS (schedules, WhatsApp, SES emails, agent calls, both user pools) is still recorded by the fakes and readable at `GET /dev/outbox`; `POST /dev/fire/<reminder_id>` fires a schedule the way Scheduler would.
 
-Each portal's header has an account menu in place of Cognito: pick a coordinator, PI or participant, or load the **Worst case** test data. The server builds the token claims from fake user pools the way Cognito would, including the real staff pre-token trigger. Sign-in follows those pools:
+Sign in at `/` with a phone number and the shared local password `TrialTalk-Demo-2026!` (checked by `POST /dev/sign-in`; the page fills in the default login, Jamie Fox at `+1 555 010 0100`). Participants use the phone number on their record; the local staff numbers are listed in [the frontend README](../coordinator-frontend/README.md#sign-in-and-sign-out). Once signed in, the account menu can switch local accounts or load the **Worst case** test data. The server builds the token claims from fake user pools the way Cognito would, including the real staff pre-token trigger. Sign-in follows those pools:
 - Whatever the Team widget changes applies on the next request.
 - Disabled staff and withdrawn participants are refused.
 - Each portal only accepts its own users.
