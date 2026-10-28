@@ -15,7 +15,7 @@ import boto3
 from common import db, legacy_mirror, scheduling
 from common.auth import Staff, require, staff_claims
 from common.http import HttpError, Router, json_body, query_params
-from staff_api import accounts, observability
+from staff_api import accounts, clinic, observability
 
 PARTICIPANT_POOL_ID = os.environ.get("PARTICIPANT_POOL_ID", "")
 REMINDER_FUNCTION_ARN = os.environ.get("REMINDER_FUNCTION_ARN", "")
@@ -28,6 +28,7 @@ DEFAULT_BUTTONS = {"dose": ["Taken", "Skipped", "Remind me in 30 min"], "visit":
 router = Router()
 router.include(accounts.router)
 router.include(observability.router)
+router.include(clinic.router)
 _cognito = None
 _lambda = None
 
@@ -530,6 +531,24 @@ def token_usage(event, staff: Staff):
     for row in by_day + by_participant:
         row["est_cost_usd"] = observability.est_cost(row["input_tokens"], row["output_tokens"])
     return 200, {"days": days, "totals": totals, "by_day": by_day, "by_participant": by_participant}
+
+
+# ------------------------------------------------------------------ ask the clinic
+
+@router.route("POST", "/staff/ask")
+def ask(event, staff: Staff):
+    """Natural-language questions about the clinic. The work lives in staff_api/ask.py, imported on first use so
+    this module loads without it (a clean 404 until it is deployed, not a 5xx). Only a missing ask module is that
+    404: an import error inside ask.py is a real bug and stays one."""
+    require(staff, "ops:read")
+    body = json_body(event)
+    try:
+        from staff_api.ask import ask_handler
+    except ModuleNotFoundError as e:
+        if e.name != "staff_api.ask":
+            raise
+        raise HttpError(404, "Ask is not available yet")
+    return ask_handler(event, staff, body)
 
 
 # ------------------------------------------------------------------ reminders and dosing
