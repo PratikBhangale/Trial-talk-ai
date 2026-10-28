@@ -318,12 +318,67 @@ def test_endless_tool_loop_stops_at_six_rounds(fakes):
     assert last_user[-1]["text"].startswith("Tool limit reached")
 
 
-def test_time_budget_stops_the_loop_before_another_model_call(fakes, monkeypatch):
-    monkeypatch.setattr(ask, "TIME_BUDGET_S", 0)
+def test_time_budget_arithmetic_fits_the_lambda_timeout():
+    # Worst case of a call started at the last allowed moment ends by the deadline, and that is inside 29 s.
+    worst = ask.CONNECT_TIMEOUT_S + ask.READ_TIMEOUT_S + ask.MARGIN_S
+    last_start = ask.DEADLINE_S - worst
+    assert last_start + worst <= ask.DEADLINE_S < 29 and last_start == 10
+    assert ask.time_for_a_model_call(0) and ask.time_for_a_model_call(last_start)
+    assert not ask.time_for_a_model_call(last_start + 0.01)
+    assert not ask.time_for_a_model_call(13.9)               # just under the old 14 s budget: no longer allowed
+
+
+@pytest.mark.parametrize("seconds_per_call, calls", [(9.9, 2), (13.9, 1), (4.0, 3)])
+def test_time_budget_stops_the_loop_before_another_model_call(fakes, monkeypatch, seconds_per_call, calls):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ask, "time", type("T", (), {"monotonic": staticmethod(lambda: clock["t"])}))
     rds, br = fakes(forever=use(("list_studies", {})), rows={ask.clinic.STUDY_ROWS: [STUDY_ROW]})
+    real = br.converse
+
+    def slow_converse(**kw):
+        clock["t"] += seconds_per_call
+        return real(**kw)
+    br.converse = slow_converse
     status, out = call(RIVERSIDE, {"question": "Keep looking."})
     assert status == 200 and out["answer"] == ask.OUT_OF_TIME
-    assert len(br.calls) == 1 and len(rds.begun) == 1      # the first call always runs; no second one
+    assert len(br.calls) == calls and len(rds.begun) == calls   # elapsed after n calls > 10 s: no further call
+
+
+def test_at_most_five_tools_run_per_turn(fakes):
+    rds, br = fakes(use(*[("find_participants", {"status": "enrolled"})] * 8), say("Here they are."),
+                    rows={ask.FIND_SQL: [MARIA]})
+    status, out = call(RIVERSIDE, {"question": "Look eight times."})
+    assert status == 200 and out["answer"] == "Here they are."
+    assert len(rds.begun) == ask.MAX_TOOLS_PER_ROUND == 5
+    assert [c["summary"] for c in out["tool_calls"]] == ["1 participants"] * 5 + ["skipped: tool limit reached"] * 3
+    results = tool_results(br.calls[1])
+    assert len(results) == 8                                   # every toolUse still gets its toolResult
+    assert [r["status"] for r in results] == ["success"] * 5 + ["error"] * 3
+    assert all("tool limit reached" in r["content"][0]["text"] for r in results[5:])
+
+
+def test_at_most_fifteen_tools_run_per_question(fakes):
+    rds, br = fakes(forever=use(*[("list_studies", {})] * 5), rows={ask.clinic.STUDY_ROWS: [STUDY_ROW]})
+    status, out = call(RIVERSIDE, {"question": "Keep looking, five at a time."})
+    assert status == 200 and ask.CAPPED in out["answer"]
+    assert len(rds.begun) == ask.MAX_TOOL_CALLS == 15          # three full rounds
+    assert len(br.calls) == 4                                  # then one chance to answer, and it asked for more
+    assert br.calls[3]["messages"][-1]["content"][-1]["text"].startswith("Tool limit reached")
+    assert len(out["tool_calls"]) == 15
+
+
+def test_huge_number_arguments_are_invalid_input_not_a_crash(fakes):
+    rds, br = fakes(use(("find_participants", {"not_engaging_days": float("inf")}),
+                        ("find_participants", {"min_missed_doses_14d": 10 ** 30})), say("ok"))
+    status, out = call(RIVERSIDE, {"question": "?"})
+    assert status == 200 and [c["summary"] for c in out["tool_calls"]] == ["invalid input", "invalid input"]
+    assert rds.statements == []
+
+
+@pytest.mark.parametrize("content", [["not a block"], "text", [{"text": "ok"}, 7]])
+def test_malformed_model_content_is_a_502(fakes, content):
+    fakes({"output": {"message": {"role": "assistant", "content": content}}, "stopReason": "end_turn"})
+    assert call(RIVERSIDE, {"question": "?"}) == (502, {"error": ask.UNAVAILABLE})
 
 
 def test_tool_sql_error_goes_back_to_the_model_without_phi(fakes):
@@ -462,10 +517,9 @@ def test_every_tool_against_the_real_schema_sees_only_the_callers_site(aws, admi
     alerts, ok = run("open_alerts", study_id="KOA-301")
     assert ok and [a["participant_id"] for a in alerts["alerts"]] == ["P-0142"]
 
-    # The tool transaction is read-only in the database itself, whatever SQL would be sent.
+    # Every tool's transaction (_scoped) is read-only in the database itself, whatever SQL would be sent.
     with pytest.raises(Exception, match="read-only transaction"):
         with ask._scoped(RIVERSIDE) as t:
-            t.execute(ask.READ_ONLY_TX)
             t.execute("UPDATE pii.participants SET city = 'x' WHERE participant_id = 'P-0142'")
 
 

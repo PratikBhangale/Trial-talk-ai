@@ -4,7 +4,8 @@ The security core is structural, not a prompt. The model only ever sees what its
 fixed, read-only SELECT that runs inside db.tx(site_ids=staff.site_ids) under a READ ONLY transaction, so row-level
 security limits it to the asking staff member's own sites. A prompt injection can make the model ask for anything;
 it can only get what the five tools below hand back for this caller. Requests for any other tool are refused
-without running anything, and the loop stops after MAX_TOOL_ROUNDS rounds of tool calls.
+without running anything. The loop is capped in rounds (MAX_TOOL_ROUNDS), in tools per round and per question
+(MAX_TOOLS_PER_ROUND, MAX_TOOL_CALLS) and in time (no model call starts unless it can finish by DEADLINE_S).
 
 Telemetry is PHI-free: counts, token totals, tool names from the allowlist. Never the question, answers, names or ids.
 """
@@ -13,6 +14,7 @@ import json
 import os
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import boto3
@@ -24,12 +26,19 @@ from staff_api import clinic
 
 MODEL_ID = os.environ.get("ASK_MODEL_ID", "global.anthropic.claude-sonnet-4-6")
 MAX_TOOL_ROUNDS = 6
+MAX_TOOLS_PER_ROUND = 5          # toolUse blocks run per model turn; the rest get a "skipped" result
+MAX_TOOL_CALLS = 15              # tools run per question, across all rounds
 MAX_QUESTION = 2000
 MAX_HISTORY = 10
 MAX_HISTORY_TEXT = 8000
 MAX_TOOL_RESULT = 12000          # characters of JSON handed back to the model per tool call
-TIME_BUDGET_S = 14               # no new model call after this; with READ_TIMEOUT_S it fits the 29 s Lambda timeout
+# Time. The Lambda times out at 29 s (API Gateway at 30 s). A model call is only started when its worst case
+# (connect + read timeout + MARGIN_S for the tools and the response) still ends by DEADLINE_S, so the loop never
+# overruns into a gateway 5xx: with these numbers no call starts after 10 s.
+DEADLINE_S = 27
+CONNECT_TIMEOUT_S = 2
 READ_TIMEOUT_S = 14
+MARGIN_S = 1
 INFERENCE = {"maxTokens": 1024, "temperature": 0.1}
 FIND_LIMIT = 25
 ALERT_LIMIT = 20
@@ -43,7 +52,9 @@ READ_ONLY_REFUSAL = ("I can only read data at your sites. I can't change partici
                      "messages; please make changes in the portal.")
 CAPPED = ("I couldn't finish working that out within my step limit. Try a narrower question, for example one "
           "study or one participant.")
-OUT_OF_TIME = "That took too long to work out. Try a narrower question, for example one study or one participant."
+SKIPPED = (f"Skipped: tool limit reached (at most {MAX_TOOLS_PER_ROUND} tools per turn and {MAX_TOOL_CALLS} per "
+           "question). Use the results you have.")
+OUT_OF_TIME ="That took too long to work out. Try a narrower question, for example one study or one participant."
 
 SYSTEM_PROMPT = """You are the clinic operations assistant for clinical trial staff (coordinators and principal \
 investigators) in the TrialTalk portal. Today is {today} (UTC). The staff member asking works at these sites: \
@@ -127,9 +138,13 @@ class ToolInputError(ValueError):
 
 # ------------------------------------------------------------------ tools
 
+@contextmanager
 def _scoped(staff: Staff):
-    """A transaction limited to the caller's sites (RLS) that the database will not let write anything."""
-    return db.tx(site_ids=staff.site_ids)
+    """A transaction limited to the caller's sites (RLS) that the database will not let write anything. Every tool
+    opens its transaction here, so none can forget either half."""
+    with db.tx(site_ids=staff.site_ids) as t:
+        t.execute(READ_ONLY_TX)
+        yield t
 
 
 def _id(value, field: str, required: bool = False) -> str | None:
@@ -149,7 +164,7 @@ def _int(value, field: str, lo: int, hi: int) -> int | None:
         raise ToolInputError(f"{field} must be a whole number")
     try:
         n = int(value)
-    except ValueError:
+    except (ValueError, OverflowError):   # "abc", NaN, 1e400 (infinity)
         raise ToolInputError(f"{field} must be a whole number")
     if not lo <= n <= hi:
         raise ToolInputError(f"{field} must be between {lo} and {hi}")
@@ -164,7 +179,6 @@ def _trial(r: dict) -> dict:
 
 def list_studies(staff: Staff) -> tuple[dict, str]:
     with _scoped(staff) as t:
-        t.execute(READ_ONLY_TX)
         rows = t.query(clinic.STUDY_ROWS, study=None)
     studies = [_trial(r) for r in rows]
     return {"studies": studies}, f"{len(studies)} studies"
@@ -178,7 +192,6 @@ def find_participants(staff: Staff, study_id=None, status=None, not_engaging_day
     idle = _int(not_engaging_days, "not_engaging_days", 1, 365)
     missed = _int(min_missed_doses_14d, "min_missed_doses_14d", 1, 100)
     with _scoped(staff) as t:
-        t.execute(READ_ONLY_TX)
         rows = t.query(FIND_SQL, study=study, status=status or None, idle=idle, missed=missed)
     truncated = len(rows) > FIND_LIMIT
     rows = rows[:FIND_LIMIT]
@@ -189,7 +202,6 @@ def find_participants(staff: Staff, study_id=None, status=None, not_engaging_day
 def participant_summary(staff: Staff, participant_id=None) -> tuple[dict, str]:
     pid = _id(participant_id, "participant_id", required=True)
     with _scoped(staff) as t:
-        t.execute(READ_ONLY_TX)
         profile = t.one(PROFILE_SQL, pid=pid)
         if not profile:
             return {"error": "No participant with that id at your sites."}, "participant not found"
@@ -205,7 +217,6 @@ def participant_summary(staff: Staff, participant_id=None) -> tuple[dict, str]:
 def study_stats(staff: Staff, study_id=None) -> tuple[dict, str]:
     study = _id(study_id, "study_id", required=True)
     with _scoped(staff) as t:
-        t.execute(READ_ONLY_TX)
         row = t.one(clinic.STUDY_ROWS, study=study)
     if not row:
         return {"error": "No trial with that id has patients at your sites."}, "study not found"
@@ -215,7 +226,6 @@ def study_stats(staff: Staff, study_id=None) -> tuple[dict, str]:
 def open_alerts(staff: Staff, study_id=None) -> tuple[dict, str]:
     study = _id(study_id, "study_id")
     with _scoped(staff) as t:
-        t.execute(READ_ONLY_TX)
         rows = t.query(OPEN_ALERTS_SQL, study=study)
     return {"alerts": rows, "limit": ALERT_LIMIT}, f"{len(rows)} open alerts"
 
@@ -303,7 +313,7 @@ def bedrock():
         from botocore.config import Config
         # One attempt, bounded waits: a Bedrock outage is a quick 502, not a retry storm against a 30 s gateway.
         _bedrock = boto3.client("bedrock-runtime", config=Config(
-            connect_timeout=2, read_timeout=READ_TIMEOUT_S, retries={"max_attempts": 1, "mode": "standard"}))
+            connect_timeout=CONNECT_TIMEOUT_S, read_timeout=READ_TIMEOUT_S, retries={"max_attempts": 1, "mode": "standard"}))
     return _bedrock
 
 
@@ -346,6 +356,11 @@ def _messages(history: list[dict], question: str) -> list[dict]:
     return msgs
 
 
+def time_for_a_model_call(elapsed_s: float) -> bool:
+    """True when a model call started now ends, at its worst (connect + read timeout + margin), by DEADLINE_S."""
+    return DEADLINE_S - elapsed_s >= CONNECT_TIMEOUT_S + READ_TIMEOUT_S + MARGIN_S
+
+
 def ask_handler(event, staff: Staff, body) -> tuple[int, dict]:
     """POST /staff/ask {"question", "history"?} -> {"answer", "tool_calls", "usage"}."""
     require(staff, "ops:read")
@@ -354,7 +369,7 @@ def ask_handler(event, staff: Staff, body) -> tuple[int, dict]:
                                             sites=", ".join(staff.site_ids))}]
     messages = _messages(history, question)
     started = time.monotonic()
-    tokens_in = tokens_out = rounds = 0
+    tokens_in = tokens_out = rounds = tools_run = 0
     tool_calls: list[dict] = []
     answer, outcome = None, "answered"
 
@@ -362,7 +377,7 @@ def ask_handler(event, staff: Staff, body) -> tuple[int, dict]:
             "gen_ai.operation.name": "chat", "gen_ai.system": "aws.bedrock", "gen_ai.request.model": MODEL_ID,
             "trialtalk.ask.history_turns": len(history)}) as span:
         while answer is None:
-            if rounds and time.monotonic() - started > TIME_BUDGET_S:
+            if not time_for_a_model_call(time.monotonic() - started):
                 answer, outcome = OUT_OF_TIME, "time_budget"
                 break
             try:
@@ -373,6 +388,8 @@ def ask_handler(event, staff: Staff, body) -> tuple[int, dict]:
                 tokens_out += int(usage.get("outputTokens") or 0)
                 message = resp["output"]["message"]
                 content = message.get("content") or []
+                if not isinstance(content, list) or not all(isinstance(b, dict) for b in content):
+                    raise ValueError("malformed content blocks")
             except Exception as e:  # never the message: it can quote the request
                 err = getattr(e, "response", None)
                 code = err.get("Error", {}).get("Code") if isinstance(err, dict) else None
@@ -396,18 +413,23 @@ def ask_handler(event, staff: Staff, body) -> tuple[int, dict]:
                                        "summary": "not run" if known else "refused: not a read-only tool"})
                 answer, outcome = READ_ONLY_REFUSAL, "refused_tool"
                 break
-            if rounds == MAX_TOOL_ROUNDS:
+            if rounds == MAX_TOOL_ROUNDS or tools_run >= MAX_TOOL_CALLS:
                 answer, outcome = (text + "\n\n" + CAPPED).strip(), "round_cap"
                 break
 
             rounds += 1
             results = []
-            for u in uses:
-                out, ok, summary, _ = run_tool(staff, u["name"], u.get("input") or {})
+            for i, u in enumerate(uses):
+                if i >= MAX_TOOLS_PER_ROUND or tools_run >= MAX_TOOL_CALLS:
+                    # Every toolUse needs a toolResult; the extras get one without touching the database.
+                    out, ok, summary = json.dumps({"error": SKIPPED}), False, "skipped: tool limit reached"
+                else:
+                    tools_run += 1
+                    out, ok, summary, _ = run_tool(staff, u["name"], u.get("input") or {})
                 tool_calls.append({"tool": u["name"], "summary": summary})
                 results.append({"toolResult": {"toolUseId": u.get("toolUseId"), "content": [{"text": out}],
                                                "status": "success" if ok else "error"}})
-            if rounds == MAX_TOOL_ROUNDS:
+            if rounds == MAX_TOOL_ROUNDS or tools_run >= MAX_TOOL_CALLS:
                 results.append({"text": "Tool limit reached. Answer now from the results above; do not call "
                                         "more tools."})
             messages.append({"role": "user", "content": results})
