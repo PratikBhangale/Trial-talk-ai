@@ -311,8 +311,10 @@ def _trace_participant(t: db.Tx, trace_id: str) -> str | None:
     a participant (see pid_from_session) that is the row's own participant_id, from the trace's channel (a trace with
     whatsapp.* spans only matches the router's trialtalk-wa sessions; any other only web sessions). Its token pair must
     equal the trace's: the agent's usage when the trace reports it (agent.invoke, else agent.call, the traces list's
-    rule), and no tokens at all when it does not, since a failed or Layer 0 reply logs none while other people's
-    successful replies do. Exactly one participant must remain; none or several give None, never a guess.
+    rule), and no tokens at all when it does not, since a failed agent call's fallback reply logs none while other
+    people's successful replies do. Only a trace that reached the agent (an agent.call or agent.invoke span) is
+    looked up: a Layer 0 or ingest-only trace has no reply of its own with a session id, so any tokenless reply in its
+    window would be someone else's. Exactly one participant must remain; none or several give None, never a guess.
     """
     num = "CASE WHEN attrs->>'{k}' ~ '^[0-9]+$' THEN (attrs->>'{k}')::bigint END"
     tin, tout = num.format(k="gen_ai.usage.input_tokens"), num.format(k="gen_ai.usage.output_tokens")
@@ -323,11 +325,12 @@ def _trace_participant(t: db.Tx, trace_id: str) -> str | None:
     rows = t.query(
         "WITH w AS (SELECT min(start_ts) AS lo, max(start_ts + duration_ms * interval '1 millisecond') AS hi, "
         f"  {usage.format(x=tin)} AS tin, {usage.format(x=tout)} AS tout, "
-        "  bool_or(left(name, 9) = 'whatsapp.') AS whatsapp "
+        "  bool_or(left(name, 9) = 'whatsapp.') AS whatsapp, "
+        "  bool_or(name IN ('agent.call', 'agent.invoke')) AS agent "
         "  FROM trial.telemetry_spans WHERE trace_id = :tid) "
         "SELECT c.participant_id, c.session_id, c.input_tokens, c.output_tokens, w.tin, w.tout, w.whatsapp "
         "FROM trial.communications c, w "
-        "WHERE c.direction = 'outbound' AND c.session_id IS NOT NULL AND c.participant_id IS NOT NULL "
+        "WHERE w.agent AND c.direction = 'outbound' AND c.session_id IS NOT NULL AND c.participant_id IS NOT NULL "
         "AND c.created_at BETWEEN w.lo - :slack::int * interval '1 millisecond' "
         "                     AND w.hi + :slack::int * interval '1 millisecond' "
         "ORDER BY c.created_at LIMIT 50", tid=trace_id, slack=MATCH_SLACK_MS)

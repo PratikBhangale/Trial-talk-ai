@@ -454,8 +454,9 @@ def test_trace_participant_is_site_scoped(call_staff, spans):
 
 
 def test_failed_whatsapp_trace_never_links_a_bystander(call_staff, spans):
-    # Review finding: Maria's agent call fails (no tokens anywhere in the trace) and the router logs her fallback
-    # reply with session_id NULL; Sam's unrelated, successful reply lands inside the 30 s window. Must not be Sam.
+    # Review finding: Maria's agent call fails (no tokens anywhere in the trace) and her fallback reply has no session
+    # id (legacy rows, from before the router kept the session on failure, or a participant whose timezone could not
+    # build one); Sam's unrelated, successful reply lands inside the 30 s window. Must not be Sam.
     maria = _enroll(call_staff, "Maria Lopez", "+17325550142")
     sam = _enroll(call_staff, "Sam Okafor", "+17325550143")
     tr = "ab" * 16
@@ -481,6 +482,40 @@ def test_failed_web_trace_links_its_own_untokened_reply(call_staff, spans):
     _reply_row(spans, maria, _web_session(maria, start), start + timedelta(seconds=5.5))
     _reply_row(spans, sam, _web_session(sam, start), start + timedelta(seconds=3), 300, 60)
     assert call_staff("GET", f"/staff/observability/traces/{tr}")[1]["participant_id"] == maria
+
+
+def test_failed_whatsapp_trace_links_its_own_fallback_reply(call_staff, spans):
+    # The router keeps the session id on a failed agent call's fallback reply (no tokens): a failed WhatsApp trace
+    # with agent spans links to its own participant, not to a bystander whose successful reply falls in the window.
+    maria = _enroll(call_staff, "Maria Lopez", "+17325550142")
+    sam = _enroll(call_staff, "Sam Okafor", "+17325550143")
+    tr = "b1" * 16
+    start = datetime.now(timezone.utc) - timedelta(minutes=5)
+    spans.execute(INSERT_SPAN, ("f-route", tr, None, "whatsapp.route", "router", "CONSUMER", start, 30000.0, "ERROR",
+                                "{}"))
+    spans.execute(INSERT_SPAN, ("f-call", tr, "f-route", "agent.call", "router", "CLIENT",
+                                start + timedelta(milliseconds=100), 29500.0, "ERROR", "{}"))
+    spans.execute(INSERT_SPAN, ("f-invoke", tr, "f-call", "agent.invoke", "trial-agent", "SERVER",
+                                start + timedelta(milliseconds=200), 29000.0, "ERROR", "{}"))
+    _reply_row(spans, maria, _wa_session(maria, start), start + timedelta(seconds=29.8))
+    _reply_row(spans, sam, _wa_session(sam, start), start + timedelta(seconds=12), 300, 60)
+    assert call_staff("GET", f"/staff/observability/traces/{tr}")[1]["participant_id"] == maria
+
+
+def test_trace_without_agent_spans_never_links(call_staff, spans):
+    # A Layer 0 trace (STOP, a dose button, an emergency route) never reaches the agent, and its own reply has no
+    # session id. A bystander's tokenless trialtalk-wa reply (their failed agent call) inside the window is not it.
+    _enroll(call_staff, "Maria Lopez", "+17325550142")
+    sam = _enroll(call_staff, "Sam Okafor", "+17325550143")
+    tr = "b2" * 16
+    start = datetime.now(timezone.utc) - timedelta(minutes=5)
+    spans.execute(INSERT_SPAN, ("z-ingest", tr, None, "whatsapp.ingest", "tt-ingest", "SERVER", start, 50.0, "OK",
+                                "{}"))
+    spans.execute(INSERT_SPAN, ("z-route", tr, "z-ingest", "whatsapp.route", "tt-router", "CONSUMER",
+                                start + timedelta(milliseconds=300), 2000.0, "OK", "{}"))
+    _reply_row(spans, sam, _wa_session(sam, start), start + timedelta(seconds=1.5))
+    body = call_staff("GET", f"/staff/observability/traces/{tr}")[1]
+    assert len(body["spans"]) == 2 and "participant_id" not in body
 
 
 def test_trace_participant_channel_and_token_pair_rules(call_staff, spans):
