@@ -4,6 +4,7 @@
 2. Dose buttons from reminders (Taken / Skipped / Remind me in 30 min) are recorded here.
 3. Everything else goes to the agent on AgentCore Runtime; its reply is sent and logged.
 """
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,7 @@ ses = boto3.client("sesv2")
 RUNTIME_ARN = os.environ["AGENT_RUNTIME_ARN"]
 COORDINATOR_EMAIL = os.environ.get("COORDINATOR_EMAIL")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
+DEMO_PARTICIPANT_ID = os.environ.get("DEMO_PARTICIPANT_ID", "")   # empty = demo mode off
 
 STOP_WORDS = {"stop", "baja", "unsubscribe", "cancelar"}
 START_WORDS = {"start", "alta", "subscribe"}
@@ -197,15 +199,33 @@ def dose_button(m, p):
 
 # ---------- agent ----------
 
-def ask_agent(p, text):
+def ask_agent(p, text, conversation_key=None):
+    """conversation_key is set only for demo users (never by the sender): it gives them private agent memory."""
     local_day = datetime.now(ZoneInfo(p["timezone"])).strftime("%Y-%m-%d")
-    session = f"trialtalk-wa-{p['participant_id']}-{local_day}".ljust(33, "0")   # API needs 33+ chars
+    owner = conversation_key or p["participant_id"]
+    session = f"trialtalk-wa-{owner}-{local_day}".ljust(33, "0")   # API needs 33+ chars
+    payload = {"participant_id": p["participant_id"], "text": text}
+    if conversation_key:
+        payload["conversation_key"] = conversation_key
     start = time.time()
     resp = agentcore.invoke_agent_runtime(
-        agentRuntimeArn=RUNTIME_ARN, runtimeSessionId=session,
-        payload=json.dumps({"participant_id": p["participant_id"], "text": text}).encode())
+        agentRuntimeArn=RUNTIME_ARN, runtimeSessionId=session, payload=json.dumps(payload).encode())
     body = json.loads(resp["response"].read())
     return body.get("reply"), {"session_id": session, "latency_ms": int((time.time() - start) * 1000)}
+
+
+def demo_chat(m):
+    """Unknown number while demo mode is on: chat with the agent as the shared synthetic participant, with private
+    memory per tester (hashed number, never stored raw). No Layer 0 checks or clinical writes, as before the router."""
+    key = "demo-" + hashlib.sha256(m["phone"].lstrip("+").encode()).hexdigest()[:12]
+    print(f"Demo user {key}")
+    demo = {"participant_id": DEMO_PARTICIPANT_ID, "timezone": "America/New_York"}
+    try:
+        answer, usage = ask_agent(demo, m["text"].strip()[:1000], key)
+    except Exception as e:
+        print(f"agent call failed for demo user {key}: {e}")
+        answer, usage = None, {}
+    reply(m, None, "en", answer or t("en", "error"), **usage)
 
 
 def handler(event, context):
@@ -213,7 +233,10 @@ def handler(event, context):
         m = json.loads(record["body"])
         pid = m.get("participant_id")
         if not pid:
-            reply(m, None, "en", t("en", "unknown"))
+            if DEMO_PARTICIPANT_ID and m.get("type") == "text" and m.get("text"):
+                demo_chat(m)
+            else:
+                reply(m, None, "en", t("en", "unknown"))
             continue
         with Tx() as tx:
             p = tx.one("""SELECT participant_id, preferred_language, timezone, whatsapp_opt_in, site_id, status

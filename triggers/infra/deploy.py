@@ -186,7 +186,7 @@ def main():
         forward = "1" if args.cutover else "0"
     env = {
         "tt-ingest": {**common, "INBOUND_QUEUE_URL": q_url, "FORWARD_TO_ROUTER": forward},
-        "tt-router": {**common, "AGENT_RUNTIME_ARN": AGENT_RUNTIME_ARN},
+        "tt-router": {**common, "AGENT_RUNTIME_ARN": AGENT_RUNTIME_ARN, "DEMO_PARTICIPANT_ID": "P-DEMO"},   # unknown numbers chat as P-DEMO, like continuum-whatsapp did
         "tt-reminder": common,
         "tt-reconcile": {**common, "DRY_RUN": "1"},
     }
