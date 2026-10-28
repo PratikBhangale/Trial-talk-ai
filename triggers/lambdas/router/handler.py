@@ -202,11 +202,25 @@ def dose_button(m, p):
 
 # ---------- agent ----------
 
-def ask_agent(p, text, conversation_key=None):
-    """conversation_key is set only for demo users (never by the sender): it gives them private agent memory."""
+def agent_session(p, conversation_key=None):
+    """AgentCore session id: one per participant (or demo tester) per local day."""
     local_day = datetime.now(ZoneInfo(p["timezone"])).strftime("%Y-%m-%d")
     owner = conversation_key or p["participant_id"]
-    session = f"trialtalk-wa-{owner}-{local_day}".ljust(33, "0")   # API needs 33+ chars
+    return f"trialtalk-wa-{owner}-{local_day}".ljust(33, "0")   # API needs 33+ chars
+
+
+def failed_agent_usage(p, conversation_key=None):
+    """Usage for the fallback reply after a failed agent call: only the session id (tokens stay NULL), so the
+    outbound row and its trace remain linkable to the participant."""
+    try:
+        return {"session_id": agent_session(p, conversation_key)}
+    except Exception:
+        return {}
+
+
+def ask_agent(p, text, conversation_key=None):
+    """conversation_key is set only for demo users (never by the sender): it gives them private agent memory."""
+    session = agent_session(p, conversation_key)
     payload = {"participant_id": p["participant_id"], "text": text}
     if conversation_key:
         payload["conversation_key"] = conversation_key
@@ -266,7 +280,7 @@ def demo_chat(m):
         answer, usage = ask_agent(demo, m["text"].strip()[:1000], key)
     except Exception as e:
         print(f"agent call failed for demo user {key}: {e}")
-        answer, usage = None, {}
+        answer, usage = None, failed_agent_usage(demo, key)
     reply(m, None, "en", answer or t("en", "error"), **usage)
 
 
@@ -319,7 +333,7 @@ def handler(event, context):
                     answer, usage = ask_agent(p, agent_text)
                 except Exception as e:
                     print(f"agent call failed for {pid}: {e}")
-                    answer, usage = None, {}
+                    answer, usage = None, failed_agent_usage(p)
                 reply(m, pid, lang, answer or t(lang, "error"), **usage)
         return {"ok": True}
     finally:

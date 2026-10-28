@@ -331,3 +331,42 @@ def test_router_db_sink_flag(aws, router, monkeypatch, sink_flag):
     else:
         assert span_writes
         assert {r["span_id"] for r in aws.rds.span_rows() if r["service"] == "trial-agent"} == {"a" * 16, "b" * 16}
+
+
+def _agent_down(payload):
+    raise RuntimeError("runtime unavailable")
+
+
+def test_router_agent_failure_keeps_session_id(aws, router):
+    """A failed agent call still logs the fallback reply with its session id (linkable on the dashboard),
+    tokens NULL, and the reply text unchanged."""
+    aws.rds.respond = router_db
+    aws.agent.respond = _agent_down
+    assert router.handler(sqs_event(), None) == {"ok": True}
+
+    (row,) = outbound_rows(aws.rds)
+    assert row["body"] == router.t("en", "error")
+    assert row["sid"] == router.agent_session(PARTICIPANT) and row["sid"].startswith("trialtalk-wa-P-001-")
+    assert row["in_tok"] is None and row["out_tok"] is None and row["lat"] is None
+    assert aws.social.sent[0]["text"]["body"] == router.t("en", "error")
+
+
+def test_router_demo_agent_failure_keeps_session_id(aws, router, monkeypatch):
+    monkeypatch.setattr(router, "DEMO_PARTICIPANT_ID", "P-DEMO")
+    aws.agent.respond = _agent_down
+    body = {"wamid": "wamid.9", "phone": PHONE, "type": "text", "text": "hello", "comm_id": "c-9",
+            "participant_id": None}
+    assert router.handler({"Records": [{"body": json.dumps(body)}]}, None) == {"ok": True}
+
+    (row,) = outbound_rows(aws.rds)
+    assert row["body"] == router.t("en", "error") and row["pid"] is None
+    assert row["sid"].startswith("trialtalk-wa-demo-") and PHONE.lstrip("+") not in row["sid"]
+    assert row["in_tok"] is None and row["out_tok"] is None
+
+
+def test_router_agent_failure_with_unusable_session_still_replies(aws, router):
+    """If even the session id can't be built, the fallback reply still goes out (session NULL, as before)."""
+    aws.rds.respond = lambda sql, p: [{**PARTICIPANT, "timezone": "Not/AZone"}] if "FROM pii.participants" in sql else []
+    assert router.handler(sqs_event(), None) == {"ok": True}
+    (row,) = outbound_rows(aws.rds)
+    assert row["body"] == router.t("en", "error") and row["sid"] is None
