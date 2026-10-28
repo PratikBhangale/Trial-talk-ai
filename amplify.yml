@@ -1,10 +1,17 @@
 version: 1
+# coordinator-frontend has no build step. The pages expect the dev server's layout (coordinator-backend/devserver):
+# / and /staff and /participant for the pages, /ui/ for everything they load. Copy the files into that layout.
 frontend:
   phases:
     build:
-      commands: []
+      commands:
+        - rm -rf dist && mkdir -p dist/ui dist/staff dist/participant
+        - cp coordinator-frontend/index.html dist/index.html
+        - cp coordinator-frontend/staff.html dist/staff/index.html
+        - cp coordinator-frontend/participant.html dist/participant/index.html
+        - cp -r coordinator-frontend/*.css coordinator-frontend/*.js coordinator-frontend/vendor dist/ui/
   artifacts:
-    baseDirectory: coordinator-frontend
+    baseDirectory: dist
     files:
       - '**/*'
   cache:

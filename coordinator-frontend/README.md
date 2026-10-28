@@ -18,23 +18,24 @@ The TrialTalk portals: plain HTML, CSS and JS, no framework and no build step.
 
 ## Sign-in and sign-out
 
-`/` (`index.html`) is one sign-in page for both portals: a **phone number and password** open whichever portal the account belongs to (staff or participant). Signing out from the account menu returns there. A portal page opened while signed out sends you to sign in and back again.
+`/` (`index.html`) is one sign-in page for both portals: an **email address or phone number, and a password**, open whichever portal the account belongs to (staff or participant). Staff sign in by email, because the `tt-staff` pool uses email as the username and Cognito can't change that on an existing pool. Signing out from the account menu returns there. A portal page opened while signed out sends you to sign in and back again.
 
 Everything about where the pages run is in `CONFIG` at the top of `common.js`:
 
-- **Local** (`localhost`, the dev server): `/dev/sign-in` checks the phone number and password. Every local account shares the password `TrialTalk-Demo-2026!`. Participants use the phone number on their record (P-0142 Maria Lopez: `+1 732 555 0142`); staff have synthetic numbers: Jamie Fox (PI, both sites) `+1 555 010 0100`, Riley Chen `…0101`, Dr. Patel `…0102`, Morgan Diaz `…0103`. The account menu can still switch between local accounts and load the worst-case data.
+- **Local** (`localhost`, the dev server): `/dev/sign-in` checks the login and password. Every local account shares the password `TrialTalk-Demo-2026!`. Participants use the phone number on their record (P-0142 Maria Lopez: `+1 732 555 0142`). Staff use their email, or a synthetic number: Jamie Fox (PI, both sites) `+1 555 010 0100`, Riley Chen `…0101`, Dr. Patel `…0102`, Morgan Diaz `…0103`. The account menu can still switch between local accounts and load the worst-case data.
 - **Hosted** (any other host, such as Amplify): sign-in goes straight from the browser to Cognito (`USER_PASSWORD_AUTH`, no SDK), including the first-time new-password step and an authenticator or SMS code. Requests carry `Authorization: Bearer <ID token>`, refreshed before it expires; sign-out revokes the refresh token. The account menu shows only who you are and Sign out.
 
-**The default login.** `CONFIG.demo` (`+1 555 010 0100` / `TrialTalk-Demo-2026!`) is filled in on the sign-in page. Locally it always opens Jamie Fox's staff account. **It is readable by anyone who opens the page**, so on a hosted build it lets anyone in: keep it only while the hosted database holds synthetic data, and delete it from `CONFIG` before anything real is reachable.
+**The default login.** Locally, `CONFIG.demo` (`+1 555 010 0100` / `TrialTalk-Demo-2026!`) is filled in on the sign-in page and opens Jamie Fox's staff account. Hosted there is none, since no Cognito user has those details. To add one, set `CONFIG.demo` for hosted builds to a synthetic staff account's email and password. **It is readable by anyone who opens the page**, so it lets anyone in: use it only while the hosted database holds synthetic data.
+
+### Hosting on Amplify
+
+`amplify.yml` at the repo root copies this folder into the layout the dev server serves (`/`, `/staff/`, `/participant/`, and `/ui/` for CSS, JS and vendor files), because the pages load everything from absolute `/ui/...` paths.
 
 ### What the hosted sign-in needs in AWS (backend work)
 
-The pages are ready; these are not yet in place:
-
-1. **Phone number as the sign-in name in the staff pool.** `tt-staff` signs people in by email and its users have no phone number. Add `phone_number` to staff users and allow it as a sign-in alias (or recreate the pool with phone sign-in), and let the app client `tt-staff-web` (`6tfennq5nb6hu8i50u2cvh3mo1`) use `USER_PASSWORD_AUTH`.
-2. **The default login, if wanted hosted:** a staff user with phone `+15550100100` and the demo password, set as permanent so there is no new-password step. The pool forces authenticator-app setup at first sign-in, which this page does not walk through (it says to contact the study team), so that user needs MFA settled in the console first.
-3. **Participants with a password.** The participant pool and `participant_api` are not deployed, and participants were designed to sign in with a WhatsApp one-time code (their password is random and unused). Phone-and-password sign-in for them needs a real password set per participant, then the participant client ID and API URL in `CONFIG.clients.participant` and `CONFIG.apiBase.participant`.
-4. **CORS on `tt-portal-api`:** add the hosted origin (the Amplify URL) to `CORS_ORIGINS` in `coordinator-backend/infra/deploy_portal.py`, allowing the `Authorization` and `Content-Type` headers.
+1. **A staff account to sign in with.** `tt-staff` has one user (`FIRST_STAFF` in `coordinator-backend/infra/deploy_portal.py`). MFA in the pool is optional, so a password is enough; a first sign-in with the emailed temporary password asks for a new one. Temporary passwords expire after 3 days. After that an admin resets the user (`admin-reset-user-password`, or `admin-set-user-password` with `--permanent`).
+2. **CORS on `tt-portal-api`:** the Amplify URL is in `CORS_ORIGINS` in `coordinator-backend/infra/deploy_portal.py`. Run that script to apply it. Any other hosted origin needs adding there too.
+3. **Participants with a password.** The participant pool and `participant_api` are not deployed, and participants were designed to sign in with a WhatsApp one-time code (their password is random and unused). Password sign-in for them needs a real password set per participant, then the participant client ID and API URL in `CONFIG.clients.participant` and `CONFIG.apiBase.participant`.
 
 ## Where it meets the backend
 

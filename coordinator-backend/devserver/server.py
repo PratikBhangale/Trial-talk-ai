@@ -67,9 +67,9 @@ SEED_STAFF = [
      "site_ids": ["LAKEVIEW"], "study_ids": ["KOA-301"]},
 ]
 
-# Dev sign-in: phone number + password, the way the hosted pages sign people in. Every local account shares one
-# password. Participants sign in with the phone number on their record; staff accounts carry no phone number in Cognito,
-# so the local staff get synthetic 555 numbers here. The first one is the default demo login the sign-in page fills in.
+# Dev sign-in: email or phone number + password, the way the hosted pages sign people in. Every local account shares
+# one password. Participants sign in with the phone number on their record. Staff sign in with their email, as in
+# Cognito, or, since they carry no phone number there, with the synthetic 555 numbers here. The first one is the default demo login the sign-in page fills in.
 DEV_PASSWORD = "TrialTalk-Demo-2026!"
 DEV_STAFF_PHONES = {"+15550100100": BOOTSTRAP_STAFF["email"], "+15550100101": SEED_STAFF[0]["email"],
                     "+15550100102": SEED_STAFF[1]["email"], "+15550100103": SEED_STAFF[2]["email"]}
@@ -223,11 +223,16 @@ def e164(phone) -> str:
     return "+" + ("1" + digits if len(digits) == 10 else digits)
 
 
-def dev_sign_in(phone, password) -> dict | None:
-    """The account this phone number and password open, or None. Disabled accounts are refused, as Cognito would."""
+def dev_sign_in(login, password) -> dict | None:
+    """The account this email or phone number and password open, or None. Disabled accounts are refused, as Cognito
+    would. An email opens a staff account (tt-staff signs people in by email); a phone number opens either kind."""
     if not hmac.compare_digest(str(password or ""), DEV_PASSWORD):
         return None
-    number, sp, pp = e164(phone), fakes.staff_pool, fakes.participant_pool
+    login, sp, pp = str(login or "").strip(), fakes.staff_pool, fakes.participant_pool
+    if "@" in login:
+        email = login.lower()
+        return {"portal": "staff", "username": email} if email in sp.users and email not in sp.disabled else None
+    number = e164(login)
     staff_user = DEV_STAFF_PHONES.get(number)
     if staff_user in sp.users and staff_user not in sp.disabled:
         return {"portal": "staff", "username": staff_user}
@@ -341,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
                 req = json.loads(body or b"{}")
             except ValueError:
                 req = {}
-            who = dev_sign_in(req.get("phone"), req.get("password"))
+            who = dev_sign_in(req.get("login"), req.get("password"))
             return self._send(200, who) if who else self._send(401, {"error": "bad_credentials"})
         if path == "/dev/outbox" and self.command == "GET":
             sp = fakes.staff_pool

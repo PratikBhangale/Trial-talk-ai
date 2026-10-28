@@ -17,15 +17,15 @@
   <section class="signin-card" aria-labelledby="signinTitle">
     <div class="signin-head">
       <h1 id="signinTitle">Sign in</h1>
-      <p id="signinLede">For study participants and study teams. Use the phone number your study site has for you.</p>
+      <p id="signinLede">For study participants and study teams. Use the email address or phone number your study site has for you.</p>
     </div>
     <p class="signin-note" id="signinNote" role="status" hidden></p>
 
-    <!-- Step 1: phone number and password. Step 2 (hosted only, when Cognito asks): a new password or a code. -->
+    <!-- Step 1: email or phone number, and password. Step 2 (hosted only, when Cognito asks): a new password or a code. -->
     <form class="signin-form" id="signinForm" novalidate>
       <div class="field">
-        <label for="phone">Phone number</label>
-        <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="username" required aria-describedby="signinErr">
+        <label for="login">Email or phone number</label>
+        <input id="login" name="login" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required aria-describedby="signinErr">
       </div>
       <div class="field">
         <label for="password">Password</label>
@@ -82,15 +82,15 @@ if (shown) { $('#signinNote').textContent = NOTES[shown]; $('#signinNote').hidde
 
 // The default login, filled in so the demo always opens with one click.
 function fillDemo() {
-  if (!CONFIG.demo?.phone) return;
-  $('#phone').value = CONFIG.demo.phone; $('#password').value = CONFIG.demo.password;
+  if (!CONFIG.demo?.login) return;
+  $('#login').value = CONFIG.demo.login; $('#password').value = CONFIG.demo.password;
   $('#signinDemo').hidden = false;
 }
 fillDemo();
 $('#clearDemo').onclick = () => {
-  $('#phone').value = ''; $('#password').value = ''; $('#signinDemo').hidden = true; $('#phone').focus();
+  $('#login').value = ''; $('#password').value = ''; $('#signinDemo').hidden = true; $('#login').focus();
 };
-['phone', 'password'].forEach(id => $('#' + id).addEventListener('input', () => {
+['login', 'password'].forEach(id => $('#' + id).addEventListener('input', () => {
   $('#signinDemo').hidden = true; showError('signinErr', '');
 }));
 
@@ -103,7 +103,7 @@ $('.pw-toggle').onclick = e => {
 };
 
 const MESSAGES = {
-  bad_credentials: "That phone number and password don't match an account. Check both and try again.",
+  bad_credentials: "That email or phone number and password don't match an account. Check both and try again.",
   network: "Can't reach TrialTalk right now. Check your connection and try again.",
   too_many: 'Too many attempts. Wait a few minutes, then try again.',
   reset_required: 'Your password needs to be reset. Contact your study site.',
@@ -127,13 +127,13 @@ function busy(form, on, label) {
 let pending = null;   // a Cognito challenge waiting for an answer
 $('#signinForm').onsubmit = async e => {
   e.preventDefault();
-  const phone = $('#phone').value.trim(), password = $('#password').value;
-  if (!phone) return showError('signinErr', 'Enter your phone number.', $('#phone'));
+  const login = $('#login').value.trim(), password = $('#password').value;
+  if (!login) return showError('signinErr', 'Enter your email address or phone number.', $('#login'));
   if (!password) return showError('signinErr', 'Enter your password.', $('#password'));
   showError('signinErr', '');
   busy(e.target, true, 'Signing in…');
   try {
-    const out = await Auth.signIn(phone, password);
+    const out = await Auth.signIn(login, password);
     if (out.challenge) return askStep(out);
     location.replace(destination(out.portal));
   } catch (err) {

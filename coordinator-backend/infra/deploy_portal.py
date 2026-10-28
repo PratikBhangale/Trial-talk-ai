@@ -30,7 +30,8 @@ CODE_DIR = pathlib.Path(__file__).resolve().parent.parent / "lambdas"
 POOL, CLIENT, API = "tt-staff", "tt-staff-web", "tt-portal-api"
 DOMAIN_PREFIX = f"tt-staff-{ACCOUNT}"
 CALLBACK_URLS = ["http://localhost:5173/"]
-CORS_ORIGINS = ["http://localhost:5173", "http://localhost:5174"]
+CORS_ORIGINS = ["http://localhost:5173", "http://localhost:5174",
+                "https://trialtalk-ui.dqzri9vvxpyky.amplifyapp.com"]   # coordinator-frontend on Amplify (branch trialtalk_ui)
 APPROVED_TEMPLATES = "dose_reminder_v2,visit_reminder_v1,daily_checkin_v1"
 # The first staff user (the build plan leaves this to the console). Everyone else is invited from /staff/accounts,
 # and nobody can grant more than they hold, so this user holds every site and study.

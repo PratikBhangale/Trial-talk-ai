@@ -1,5 +1,5 @@
 // Shared helpers for the two portals and the sign-in page.
-// Sign-in (see Auth below) takes a phone number and password. On the local dev server it is checked by /dev/sign-in
+// Sign-in (see Auth below) takes an email address or phone number, and a password. On the local dev server it is checked by /dev/sign-in
 // and requests carry X-Dev-Identity; on a hosted build it goes to Cognito and requests carry the ID token.
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -23,12 +23,12 @@ const CONFIG = {
   apiBase: LOCAL ? { staff: '/api', participant: '/api' }
     : { staff: 'https://ca0jle1s2g.execute-api.us-east-1.amazonaws.com', participant: '' },
   cognitoRegion: 'us-east-1',
-  // Cognito app clients that allow USER_PASSWORD_AUTH with the phone number as the sign-in name. Empty = not deployed.
+  // Cognito app clients that allow USER_PASSWORD_AUTH. Staff (tt-staff) sign in by email; empty = not deployed.
   clients: { staff: '6tfennq5nb6hu8i50u2cvh3mo1', participant: '' },
   // The default login the sign-in page fills in. The dev server always accepts it (Jamie Fox, PI at every site).
-  // Hosted, it works once a Cognito user with this phone number and password exists. Anyone can read it here,
-  // so it opens the portal to anyone: remove it before real participant data is reachable.
-  demo: { phone: '+1 555 010 0100', password: 'TrialTalk-Demo-2026!' },
+  // Hosted there is none: no Cognito user has these details. To add one, set it to a synthetic account's email and
+  // password. Anyone can read it here, so it opens the portal to anyone: never use it once real data is reachable.
+  demo: LOCAL ? { login: '+1 555 010 0100', password: 'TrialTalk-Demo-2026!' } : null,
 };
 
 // ------------------------------------------------------------ brand + icons
@@ -518,7 +518,8 @@ function formData(form) {
 }
 
 // ------------------------------------------------------------ sign-in and sign-out
-// One sign-in for both portals: a phone number and password open whichever portal the account belongs to.
+// One sign-in for both portals: an email address or phone number, and a password, open whichever portal the
+// account belongs to.
 // The session lives in localStorage as tt.session = { portal, user, name?, groups?, site_ids?, clientId?, id?, refresh?, exp? }.
 const Auth = {
   session() { try { return JSON.parse(store('session') || 'null'); } catch { return null; } },
@@ -526,17 +527,17 @@ const Auth = {
 
   // Resolves to { portal } when signed in, or { challenge, ... } when Cognito needs one more step (pass it to respond).
   // Rejects with an Error whose .code is bad_credentials, mfa_setup, reset_required, too_many or network.
-  async signIn(phone, password) {
+  async signIn(login, password) {
     if (LOCAL) {
       const res = await fetch('/dev/sign-in', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, password }) }).catch(() => null);
+        body: JSON.stringify({ login, password }) }).catch(() => null);
       if (!res) throw authError('network');
       if (!res.ok) throw authError('bad_credentials');
       const who = await res.json();
       this.save({ portal: who.portal, user: who.username });
       return { portal: who.portal };
     }
-    const username = e164(phone);
+    const username = signInName(login);
     for (const portal of Object.keys(PORTALS)) {
       const clientId = CONFIG.clients[portal]; if (!clientId) continue;
       try {
@@ -599,9 +600,12 @@ const Auth = {
 };
 
 const authError = code => Object.assign(new Error(code), { code });
-// What the person typed, as +<digits>. Ten digits are read as a US number.
-function e164(phone) {
-  const digits = String(phone || '').replace(/\D/g, '');
+// What the person typed, as a Cognito sign-in name: an email address in lower case, or a phone number as +<digits>
+// (ten digits are read as a US number).
+function signInName(login) {
+  const s = String(login || '').trim();
+  if (s.includes('@')) return s.toLowerCase();
+  const digits = s.replace(/\D/g, '');
   return '+' + (digits.length === 10 ? '1' + digits : digits);
 }
 function jwtClaims(token) {
