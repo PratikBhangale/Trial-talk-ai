@@ -2,7 +2,7 @@
 -- Run after 03_seed.sql, as the master user. Re-runnable, leaves no test rows behind.
 --
 -- A failing test raises an error starting with "FAIL Txx" (or an unexpected SQL error) and stops the run.
--- Passing tests are recorded in tt_test.results, the last statement lists them (expect 19 rows).
+-- Passing tests are recorded in tt_test.results, the last statement lists them (expect 20 rows).
 
 GRANT agent_role, messaging_role, portal_role, participant_role TO CURRENT_USER;  -- lets the master SET ROLE
 
@@ -357,6 +357,20 @@ DO $$ BEGIN
   EXCEPTION WHEN check_violation THEN NULL;
   END;
   PERFORM tt_test.pass('T19', 'reminder schedule CHECK enforced');
+END $$;
+
+DO $$
+DECLARE missing text;
+BEGIN
+  PERFORM tt_test.become(NULL);
+  SELECT string_agg(column_name, ', ') INTO missing FROM information_schema.columns t
+  WHERE t.table_schema = 'trial' AND t.table_name = 'clinical_events'
+    AND NOT EXISTS (SELECT 1 FROM information_schema.columns v WHERE v.table_schema = 'trial'
+                    AND v.table_name = 'current_events' AND v.column_name = t.column_name);
+  IF missing IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL T20: current_events is missing %; recreate the view after adding columns', missing;
+  END IF;
+  PERFORM tt_test.pass('T20', 'current_events has every clinical_events column');
 END $$;
 
 RESET ROLE;
