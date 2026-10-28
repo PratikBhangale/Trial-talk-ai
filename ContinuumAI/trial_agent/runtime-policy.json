@@ -32,6 +32,12 @@
       "Resource": "arn:aws:bedrock-agentcore:us-east-1:180026596905:memory/trial_agent_memory-LfUMHsApOY"
     },
     {
+      "Sid": "KnowledgeBaseRetrieve",
+      "Effect": "Allow",
+      "Action": "bedrock:Retrieve",
+      "Resource": "arn:aws:bedrock:us-east-1:180026596905:knowledge-base/4RKI2MFBQR"
+    },
+    {
       "Sid": "SesSend",
       "Effect": "Allow",
       "Action": ["ses:SendEmail"],

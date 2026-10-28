@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import boto3
@@ -10,6 +11,8 @@ import store
 BASE_DIR = Path(__file__).parent
 CONFIG = yaml.safe_load((BASE_DIR / "root_agent.yaml").read_text())
 ses = boto3.client("sesv2", region_name=CONFIG["model"]["region"])
+kb = boto3.client("bedrock-agent-runtime", region_name=CONFIG["model"]["region"])
+KNOWLEDGE_BASE_ID = os.environ["KNOWLEDGE_BASE_ID"]
 
 # Only these profile fields are ever shown to the agent
 PROFILE_FIELDS = ("participant_id", "study_id", "site_id", "status", "preferred_language",
@@ -71,12 +74,34 @@ def escalate_to_coordinator(severity: str, summary: str, tool_context: ToolConte
 
 @tool
 def search_trial_docs(question: str) -> str:
-    """Look up the approved participant guide to answer a protocol question.
+    """Search the approved trial documents for passages that answer a protocol question.
 
     Args:
         question: the participant's question in plain words.
     """
-    return (BASE_DIR / "trial_docs.md").read_text()
+    try:
+        resp = kb.retrieve(
+            knowledgeBaseId=KNOWLEDGE_BASE_ID,
+            retrievalQuery={"text": question},
+            # Managed knowledge bases take managedSearchConfiguration, not vectorSearchConfiguration
+            retrievalConfiguration={"managedSearchConfiguration": {
+                "numberOfResults": CONFIG["knowledge_base"]["max_results"],
+            }},
+        )
+    except Exception as e:
+        print(f"\n*** KB SEARCH FAILED: {e} ***\n")
+        return ("The trial documents could not be searched right now. "
+                "Tell the participant the study team will reply, and escalate with severity routine.")
+
+    passages = []
+    for r in resp.get("retrievalResults", []):
+        text = r.get("content", {}).get("text")
+        if text:
+            uri = r.get("location", {}).get("s3Location", {}).get("uri", "")
+            passages.append(f"[{uri.rsplit('/', 1)[-1] or 'trial document'}]\n{text}")
+    if not passages:
+        return "No passage in the trial documents covers this question."
+    return "\n\n---\n\n".join(passages)
 
 
 # Maps the tool names used in root_agent.yaml to the functions above
