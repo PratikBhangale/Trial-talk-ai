@@ -93,13 +93,21 @@ class EchoAgent(FakeAgentCore):
 
 def _init_without_request_sink(real_init):
     """telemetry.init that builds the tracer with TELEMETRY_DB_SINK=0 (no per-request DB exporter) and then removes
-    the flag again, so persist_spans keeps writing."""
+    the flag again, so persist_spans keeps writing. The flag is process-wide, so it is touched only when a build
+    really happens (first call or force=True: startup and Reset data, which holds LOCK like every chat request),
+    never on the idempotent calls every request makes from other threads."""
+    if getattr(real_init, "_no_request_sink", False):
+        return real_init
+
     def init(**kw):
+        if telemetry._state and not kw.get("force"):
+            return real_init(**kw)
         os.environ["TELEMETRY_DB_SINK"] = "0"
         try:
             return real_init(**kw)
         finally:
             os.environ.pop("TELEMETRY_DB_SINK", None)
+    init._no_request_sink = True
     return init
 
 

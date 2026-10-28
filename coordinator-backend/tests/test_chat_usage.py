@@ -5,6 +5,7 @@ the real agent: {"reply", "usage": {...}, "trace": {"trace_id", "spans": [...]}}
 """
 
 import json
+import os
 import re
 import sys
 import types
@@ -201,3 +202,20 @@ def test_seeded_data_renders_in_observability(pg, call_staff, aws, admin, clean_
     assert len(body["drift"]["config_changes"]) >= 1
     status, body = call_staff("GET", "/staff/observability/traces", query={"limit": "5"})
     assert status == 200 and len(body["traces"]) == 5
+
+
+def test_devserver_init_wrapper_touches_the_flag_only_when_building(monkeypatch):
+    """The flag is process-wide: idempotent init() calls (every request, on other threads) must not set it."""
+    import server
+    from common import telemetry
+    monkeypatch.delenv("TELEMETRY_DB_SINK", raising=False)
+    seen = []
+    wrapped = server._init_without_request_sink(lambda **kw: seen.append(os.environ.get("TELEMETRY_DB_SINK")))
+    assert server._init_without_request_sink(wrapped) is wrapped  # no double wrapping
+    monkeypatch.setattr(telemetry, "_state", {})
+    wrapped()                                   # first build: flag "0" during, gone after
+    monkeypatch.setattr(telemetry, "_state", {"built": True})
+    wrapped()                                   # idempotent call: flag untouched
+    wrapped(force=True)                         # rebuild (Reset data): flag "0" during
+    assert seen == ["0", None, "0"]
+    assert "TELEMETRY_DB_SINK" not in os.environ
