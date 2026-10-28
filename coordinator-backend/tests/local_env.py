@@ -231,18 +231,27 @@ class FakeCognito:
         class UsernameExistsException(Exception):
             pass
 
+        class AliasExistsException(Exception):
+            pass
+
     def __init__(self):
         self.users, self.disabled, self.groups, self.meta = {}, set(), {}, {}
-        self.signed_out, self.resets = [], []
+        self.signed_out, self.resets, self.passwords = [], [], {}
 
     def _need(self, Username):
         if Username not in self.users:
             raise self.exceptions.UserNotFoundException()
 
-    def admin_create_user(self, UserPoolId, Username, UserAttributes, MessageAction=None, DesiredDeliveryMediums=None):
+    def admin_create_user(self, UserPoolId, Username, UserAttributes, MessageAction=None, DesiredDeliveryMediums=None,
+                          TemporaryPassword=None):
         if Username in self.users:
             raise self.exceptions.UsernameExistsException()
-        self.users[Username] = {a["Name"]: a["Value"] for a in UserAttributes}
+        attrs = {a["Name"]: a["Value"] for a in UserAttributes}
+        phone = attrs.get("phone_number")  # a verified phone number is a sign-in alias: one user per number
+        if phone and any(u.get("phone_number") == phone for u in self.users.values()):
+            raise self.exceptions.AliasExistsException()
+        self.users[Username] = attrs
+        self.passwords[Username] = TemporaryPassword
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         self.meta[Username] = {"UserStatus": "FORCE_CHANGE_PASSWORD", "UserCreateDate": now,
                                "UserLastModifiedDate": now}
@@ -259,8 +268,10 @@ class FakeCognito:
     def list_users(self, UserPoolId, Limit=60, PaginationToken=None):
         return {"Users": [self._raw(u, "Attributes") for u in self.users]}
 
-    def admin_set_user_password(self, **kw):
-        self.meta.setdefault(kw["Username"], {})["UserStatus"] = "CONFIRMED"
+    def admin_set_user_password(self, UserPoolId="", Username="", Password=None, Permanent=False):
+        self._need(Username)
+        self.passwords[Username] = Password
+        self.meta.setdefault(Username, {})["UserStatus"] = "CONFIRMED" if Permanent else "FORCE_CHANGE_PASSWORD"
 
     def admin_update_user_attributes(self, UserPoolId, Username, UserAttributes):
         self._need(Username)

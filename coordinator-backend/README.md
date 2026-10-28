@@ -40,7 +40,8 @@ All bodies are JSON. Send the Cognito **ID token** as `Authorization: Bearer <to
 | --- | --- | --- |
 | GET | `/staff/me` | Role, sites and studies from the token |
 | GET | `/staff/participants?q=&status=&site_id=` | List or search participants at your sites |
-| POST | `/staff/participants` | Enroll a participant. Needs `full_name`, `phone_e164`, `study_id`, `site_id`; optional `email`, `date_of_birth`, address fields, `preferred_language`, `timezone`, `status`, `whatsapp_opt_in`. Also creates their website login |
+| POST | `/staff/participants` | Enroll a participant. Needs `full_name`, `phone_e164`, `study_id`, `site_id`; optional `email`, `date_of_birth`, address fields, `preferred_language`, `timezone`, `status`, `whatsapp_opt_in`. Also creates their website login and returns its `temporary_password` once (see "Participant logins") |
+| POST | `/staff/participants/{pid}/reset-login` | Forgot password: a new `temporary_password`, returned once. Creates the login if the participant has none. Refused (409) for withdrawn participants |
 | GET | `/staff/participants/{pid}` | Profile and all reminders |
 | PATCH | `/staff/participants/{pid}` | Edit contact, language, time zone, status or opt-in. Changing name, DOB or phone needs `change_reason` |
 | DELETE | `/staff/participants/{pid}` | **Withdraw** (`{"reason": "..."}` is required). See "Deleting participants" |
@@ -74,6 +75,14 @@ POST /staff/participants/P-1001/reminders
 
 As the plan requires, staff only *schedule* doses here. No API or agent tool changes treatment.
 
+### Participant logins
+
+Participants sign in to the participant site with their phone number and a password, in the pool named by `PARTICIPANT_POOL_ID` (`trialtalk-participants`).
+- Enrolling creates the Cognito user `P-xxxx` with a temporary password such as `Tq7k-Wm4p-Rx9d`. Nothing is sent to the participant: the staff portal shows the password once and staff hand it over in person or by phone. Cognito asks for a new password at the first sign-in. A temporary password expires after the pool's `TemporaryPasswordValidityDays` (7).
+- A participant who forgets their password contacts their site, and staff press **Reset login** (`/reset-login`). The old password stops working and they get a new temporary one. The pool's account recovery is `admin_only`, so there is no self-service reset.
+- Temporary passwords are never stored or logged. The audit line `participant.login_reset` records who reset whose login.
+- A phone number is a sign-in alias, so it can belong to only one login. If another login already has it, enrolling or a reset returns 409.
+
 ### Emergency alerts (staff, same roles and site scope)
 
 | Method | Path | What it does |
@@ -95,7 +104,7 @@ There is no admin group, portal or API. Any coordinator or PI can manage account
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/staff/accounts?q=` | Staff accounts with role, sites, studies, enabled, Cognito status |
-| POST | `/staff/accounts` | Invite: `email`, `role` (`coordinator` / `PI`), `site_ids`, `study_ids`, `name`. Cognito emails a temporary password; MFA setup is required at first sign-in |
+| POST | `/staff/accounts` | Invite: `email`, `site_ids`, `study_ids`, `name`. Every invite joins the `PI` group (a `role` in the body is ignored; PATCH can change it), so only a PI can invite. Cognito emails a temporary password; MFA setup is required at first sign-in |
 | GET / PATCH | `/staff/accounts/{username}` | Read, or change `role`, `site_ids`, `study_ids`, `name`. Takes effect at the user's next token refresh |
 | POST | `/staff/accounts/{username}/disable` | Block sign-in and sign out everywhere (optional `reason`). Issued ID tokens last until expiry, at most 60 minutes |
 | POST | `/staff/accounts/{username}/enable` | Re-enable |

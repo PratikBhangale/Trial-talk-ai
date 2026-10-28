@@ -28,10 +28,9 @@ const CONFIG = {
   // Cognito app clients that allow USER_PASSWORD_AUTH. Staff: tt-staff-web in tt-staff, signing in by email.
   // Participants: the web client of trialtalk-participants, signing in by phone number (an alias in that pool).
   clients: { staff: '6tfennq5nb6hu8i50u2cvh3mo1', participant: '60qtjo1628btf8aibe7o0808pe' },
-  // The default login the sign-in page fills in. The dev server always accepts it (Jamie Fox, PI at every site).
-  // Hosted there is none: no Cognito user has these details. To add one, set it to a synthetic account's email and
-  // password. Anyone can read it here, so it opens the portal to anyone: never use it once real data is reachable.
-  demo: LOCAL ? { login: '+1 555 010 0100', password: 'TrialTalk-Demo-2026!' } : null,
+  // The default login the sign-in page fills in. Never put credentials in this file: it is served publicly. Locally,
+  // index.html asks the dev server for it (GET /dev/demo); hosted there is none.
+  demo: null,
 };
 
 // ------------------------------------------------------------ brand + icons

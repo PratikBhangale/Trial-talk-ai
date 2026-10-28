@@ -172,7 +172,7 @@
             </div>
             <div class="sheet-body">
               <div class="hidden" id="enrollPanel">
-                <p class="panel-note">Enrolling creates the participant's sign-in for the participant site.</p>
+                <p class="panel-note">Enrolling creates the participant's sign-in for the participant site and gives you a temporary password to hand them.</p>
                 <form class="form" id="enrollForm">
                   <label>Full name<input name="full_name" required value="Casey Morgan" autocomplete="off"></label>
                   <label>Phone <span class="hint">E.164, e.g. +17325550199</span><input name="phone_e164" type="tel" required value="+17325550199"></label>
@@ -193,6 +193,7 @@
                     <div class="avatar lg" id="dAvatar" aria-hidden="true"></div>
                     <div><h2 id="dTitle"></h2><div class="meta" id="dMeta"></div></div>
                     <div class="actions"><button class="small" id="editBtn" type="button"><span data-icon="pencil"></span>Edit details</button>
+                      <button class="small" id="resetLoginBtn" type="button">Reset login</button>
                       <button class="small danger" id="withdrawBtn" type="button">Withdraw</button></div>
                   </div>
                   <!-- Read first, edit on request: the details as a summary, the form only after "Edit details". -->
@@ -840,7 +841,7 @@ async function showDetail(pid, where = 'sheet') {
   }
   $('#dMeta').innerHTML = `${chip(p.status)}<span class="tag">${esc(p.participant_id)}</span><span class="tag">${esc(humanize(String(p.site_id).toLowerCase()))}</span>`
     + `<span class="tag">Study ${esc(p.study_id)}</span>`;
-  $('#withdrawBtn').disabled = p.status === 'withdrawn';
+  $('#withdrawBtn').disabled = $('#resetLoginBtn').disabled = p.status === 'withdrawn';
   $('#profileForm').innerHTML = PROFILE_FIELDS.map(([k, l, reason, t]) =>
     `<label>${esc(l)}${reason ? ' <span class="hint">· needs a reason</span>' : ''}<input name="${k}" type="${t || 'text'}" value="${esc(p[k])}" data-orig="${esc(p[k])}"></label>`).join('')
     + `<label>Language<select name="preferred_language" data-orig="${esc(p.preferred_language)}">${LANGS.map(([v, l]) =>
@@ -984,9 +985,29 @@ $('#newPartBtn').onclick = () => {
 };
 $('#enrollForm').onsubmit = async e => {
   e.preventDefault();
-  const { participant } = await api('POST', '/staff/participants', formData(e.target));
+  const { participant, temporary_password } = await api('POST', '/staff/participants', formData(e.target));
   toast(`Enrolled ${participant.full_name} (${participant.participant_id}). Their participant-site login was created.`);
-  await loadParticipants(); showDetail(participant.participant_id);
+  await loadParticipants(); await showDetail(participant.participant_id);
+  if (temporary_password) showTempPassword(participant.full_name, participant.phone_e164, temporary_password);
+};
+// The API returns a participant's temporary password once (enrollment, Reset login) and never stores it.
+async function showTempPassword(name, phone, password) {
+  const copy = await ask({ title: `Temporary password for ${name}`, pre: password, confirm: 'Copy password', cancel: 'Done',
+    message: `Give this to ${name} in person or by phone; it is not shown again. They sign in to the participant site with `
+      + `${phone} and this password, then choose their own. It expires in 7 days; use Reset login for a new one.` });
+  if (!copy) return;
+  try { await navigator.clipboard.writeText(password); toast('Password copied'); }
+  catch { toast(`Could not copy. The temporary password is ${password}`, true); }
+}
+$('#resetLoginBtn').onclick = async () => {
+  const name = $('#dTitle').textContent;
+  const ok = await ask({ title: `Reset ${name}'s login?`, confirm: 'Reset login',
+    message: 'Their current password stops working. You get a temporary password to give them, and they choose a new one when they sign in.' });
+  if (!ok) return;
+  const pid = state.pid;
+  const [{ participant }, out] = await Promise.all([api('GET', `/staff/participants/${pid}`),
+    api('POST', `/staff/participants/${pid}/reset-login`)]);
+  showTempPassword(participant.full_name, participant.phone_e164, out.temporary_password);
 };
 $('#editBtn').onclick = () => setEditing(true);
 $('#profileForm').addEventListener('click', e => {

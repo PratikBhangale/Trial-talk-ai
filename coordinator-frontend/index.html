@@ -81,9 +81,11 @@ const shown = note || (NOTES.other && 'other');
 if (shown) { $('#signinNote').textContent = NOTES[shown]; $('#signinNote').hidden = false; }
 
 // The default login, filled in so the demo always opens with one click.
-function fillDemo() {
-  if (!CONFIG.demo?.login) return;
-  $('#login').value = CONFIG.demo.login; $('#password').value = CONFIG.demo.password;
+async function fillDemo() {
+  if (!LOCAL) return;
+  const demo = await fetch('/dev/demo').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!demo?.login) return;
+  $('#login').value = demo.login; $('#password').value = demo.password;
   $('#signinDemo').hidden = false;
 }
 fillDemo();

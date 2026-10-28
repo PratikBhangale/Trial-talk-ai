@@ -164,7 +164,7 @@ def create_account(event, staff: Staff):
     email = (body.get("email") or "").strip().lower()
     if not EMAIL_RE.match(email):
         raise HttpError(400, "A valid email is required")
-    role = _role(body.get("role"))
+    role = "PI"  # everyone invited from the staff portal joins the PI group; PATCH can still change the role
     sites, studies = _ids(body.get("site_ids"), "site_ids"), _ids(body.get("study_ids"), "study_ids")
     if not sites:
         raise HttpError(400, "Coordinators and PIs need at least one site")

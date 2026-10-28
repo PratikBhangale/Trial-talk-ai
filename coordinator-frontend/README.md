@@ -26,7 +26,7 @@ Everything about where the pages run is in `CONFIG` at the top of `common.js`:
 - **Local** (`localhost`, the dev server): `/dev/sign-in` checks the login and password. Every local account shares the password `TrialTalk-Demo-2026!`. Participants use the phone number on their record (P-0142 Maria Lopez: `+1 732 555 0142`). Staff use their email, or a synthetic number: Jamie Fox (PI, both sites) `+1 555 010 0100`, Riley Chen `…0101`, Dr. Patel `…0102`, Morgan Diaz `…0103`. The account menu can still switch between local accounts and load the worst-case data.
 - **Hosted** (any other host, such as Amplify): sign-in goes straight from the browser to Cognito (`USER_PASSWORD_AUTH`, no SDK), including the first-time new-password step and an authenticator or SMS code. Requests carry `Authorization: Bearer <ID token>`, refreshed before it expires; sign-out revokes the refresh token. The account menu shows only who you are and Sign out.
 
-**The default login.** Locally, `CONFIG.demo` (`+1 555 010 0100` / `TrialTalk-Demo-2026!`) is filled in on the sign-in page and opens Jamie Fox's staff account. Hosted there is none, since no Cognito user has those details. To add one, set `CONFIG.demo` for hosted builds to a synthetic staff account's email and password. **It is readable by anyone who opens the page**, so it lets anyone in: use it only while the hosted database holds synthetic data.
+**The default login.** Locally, the sign-in page asks the dev server for it (`GET /dev/demo`: `+1 555 010 0100` with the shared dev password) and fills it in, opening Jamie Fox's staff account. No credentials are kept in `common.js`, because it is served publicly. Hosted there is none.
 
 ### Hosting on Amplify
 

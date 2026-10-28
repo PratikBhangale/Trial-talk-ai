@@ -38,7 +38,7 @@ It's safe to re-run after changing any Lambda code. Each Lambda gets its own IAM
 
 Every zip also bundles the OpenTelemetry SDK, pip-installed from the pinned [`../infra-requirements-otel.txt`](../infra-requirements-otel.txt) (once per run, for the build Python resolving for 3.12 with `--only-binary=:all:`). The OTel wheels are pure Python, so building on an x86 or Apple laptop is fine for the arm64 Lambdas. Without the SDK in the zip, `common/telemetry.py` silently no-ops. Each function is also deployed with `TELEMETRY_DB_SINK=1`, which turns on the database span sink (it needs `DB_CLUSTER_ARN` and `DB_SECRET_ARN`, which are already set).
 
-The legacy `continuum-whatsapp` Lambda has no deploy script here (it was deployed by hand). It only gains telemetry if its zip is rebuilt with `common/telemetry.py` and the OTel deps; it is slated for replacement at cutover.
+The legacy `continuum-whatsapp` Lambda has no deploy script here (it was deployed by hand). It only gains telemetry if its zip is rebuilt with `common/telemetry.py` and the OTel deps; it no longer receives messages since the cutover.
 
 ### Tests
 
@@ -47,9 +47,11 @@ cd triggers && python -m pytest tests/        # a venv with opentelemetry-sdk==1
 cd coordinator-backend && python -m pytest tests/test_deploy_zip.py   # zip packaging, no AWS and no pip
 ```
 
-## Switching on (cutover)
+## Cutover (done)
 
-`continuum-whatsapp` is also subscribed to `whatsapp_topic` and replies to every message. To avoid double replies, **`tt-ingest` only logs; forwarding to the router is off** until cutover:
+The cutover has been run: `continuum-whatsapp` is unsubscribed from `whatsapp_topic`, and `tt-ingest` forwards every inbound message to `tt-router` (`FORWARD_TO_ROUTER=1`; a normal `deploy.py` run keeps the current setting). `continuum-whatsapp` still exists but receives nothing. The router also takes over its demo mode: an unknown number that sends text chats with the agent as the shared `P-DEMO` participant, with private memory per tester (`DEMO_PARTICIPANT_ID` on `tt-router`).
+
+For reference, the steps were:
 
 ```bash
 aws sns list-subscriptions-by-topic --topic-arn arn:aws:sns:us-east-1:180026596905:whatsapp_topic

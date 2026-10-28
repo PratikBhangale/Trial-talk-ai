@@ -190,26 +190,64 @@ def create_participant(event, staff: Staff):
         else:
             raise HttpError(503, "Could not allocate a participant id; try again")
         participant = get_participant(t, row["participant_id"])
-        if PARTICIPANT_POOL_ID:
-            _create_login(participant)
+        password = _create_login(participant) if PARTICIPANT_POOL_ID else None
         _sync_mirror(t, participant["participant_id"])
-    return 201, {"participant": participant}
+    out = {"participant": participant}
+    if password:
+        out["temporary_password"] = password  # shown to staff once; never stored or logged
+    return 201, out
 
 
-def _create_login(p: dict) -> None:
-    """Participant website login: phone number + one-time code on WhatsApp (custom auth)."""
-    pool = PARTICIPANT_POOL_ID
-    cognito().admin_create_user(
-        UserPoolId=pool, Username=p["participant_id"], MessageAction="SUPPRESS",
-        UserAttributes=[
-            {"Name": "phone_number", "Value": p["phone_e164"]},
-            {"Name": "phone_number_verified", "Value": "true"},
-            {"Name": "custom:participant_id", "Value": p["participant_id"]},
-        ],
-    )
-    # Never used to sign in (custom auth only); a permanent password just takes the user out of FORCE_CHANGE_PASSWORD.
-    cognito().admin_set_user_password(UserPoolId=pool, Username=p["participant_id"],
-                                      Password=secrets.token_urlsafe(24) + "aA1!", Permanent=True)
+# No look-alikes (0/O, 1/l/I), so staff can read it out over the phone. "-" is the symbol the pool's policy requires.
+_PASSWORD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+
+
+def _temp_password() -> str:
+    """Like Tq7k-Wm4p-Rx9d: about 69 bits, with an upper, a lower, a number and a symbol."""
+    while True:
+        pw = "-".join("".join(secrets.choice(_PASSWORD_CHARS) for _ in range(4)) for _ in range(3))
+        if any(c.isupper() for c in pw) and any(c.islower() for c in pw) and any(c.isdigit() for c in pw):
+            return pw
+
+
+def _create_login(p: dict) -> str:
+    """Participant website login: phone number + password. Returns the temporary password; Cognito asks for a new
+    one at the first sign-in, and the temporary one expires after the pool's TemporaryPasswordValidityDays."""
+    password = _temp_password()
+    try:
+        cognito().admin_create_user(
+            UserPoolId=PARTICIPANT_POOL_ID, Username=p["participant_id"], TemporaryPassword=password,
+            MessageAction="SUPPRESS",   # staff hand the password over; nothing is sent
+            UserAttributes=[
+                {"Name": "phone_number", "Value": p["phone_e164"]},
+                {"Name": "phone_number_verified", "Value": "true"},
+                {"Name": "custom:participant_id", "Value": p["participant_id"]},
+            ],
+        )
+    except cognito().exceptions.AliasExistsException:
+        raise HttpError(409, "Another website login already uses this phone number")
+    return password
+
+
+@router.route("POST", "/staff/participants/{pid}/reset-login")
+def reset_login(event, staff: Staff, pid: str):
+    """Forgot password, through the site: a new temporary password, shown once. Creates the login if there is none
+    (participants enrolled before website logins). The participant chooses their own at the next sign-in."""
+    if not PARTICIPANT_POOL_ID:
+        raise HttpError(503, "Participant website logins are not set up")
+    with db.tx(site_ids=staff.site_ids) as t:
+        p = get_participant(t, pid)
+    require(staff, "participant:write", site_id=p["site_id"], study_id=p["study_id"])
+    if p["status"] == "withdrawn":
+        raise HttpError(409, "This participant has withdrawn, so their login stays disabled")
+    password = _temp_password()
+    try:
+        cognito().admin_set_user_password(UserPoolId=PARTICIPANT_POOL_ID, Username=pid, Password=password,
+                                          Permanent=False)
+    except cognito().exceptions.UserNotFoundException:
+        password = _create_login(p)
+    _audit(staff, "participant.login_reset", participant_id=pid)
+    return 200, {"participant_id": pid, "temporary_password": password}
 
 
 @router.route("GET", "/staff/participants/{pid}")

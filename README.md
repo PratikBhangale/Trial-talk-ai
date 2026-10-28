@@ -2,7 +2,7 @@
 
 TrialTalk is a clinical-trial participant companion. Participants talk to an Amazon Bedrock AgentCore agent (Claude on Bedrock, with knowledge-base retrieval for protocol questions) over WhatsApp, sent and received through AWS End User Messaging Social. Study staff run a web portal for participants, reminders, requests and emergency alerts. Amazon SES carries coordinator escalations, emergency alerts and missed-dose follow-ups. Every message path is traced with OpenTelemetry (spans, token usage, estimated cost, config-change markers), and the staff portal has an Observability dashboard that reads those traces from Aurora.
 
-Active branch: `trialtalk_ui`. Everything below is synthetic data; no real participant or PHI is in the repo.
+Active branch: `main`. The staff and participant pages are hosted on AWS Amplify (branch `main`, `amplify.yml`) at https://main.dqzri9vvxpyky.amplifyapp.com (`/staff/` and `/participant/`). Everything below is synthetic data; no real participant or PHI is in the repo.
 
 ## Run it locally in 5 minutes (no AWS needed)
 
@@ -16,7 +16,6 @@ Prerequisites:
 ```bash
 git clone https://github.com/PratikBhangale/Continuum-ai.git
 cd Continuum-ai
-git checkout trialtalk_ui
 
 python3 -m venv .venv
 .venv/bin/pip install "psycopg[binary]" boto3
@@ -31,7 +30,7 @@ Then open **http://127.0.0.1:8787/staff**:
 
 1. You land on the sign-in page with a demo staff account already filled in (Jamie Fox, a PI at both sites; local password for every account is `TrialTalk-Demo-2026!`). Click **Sign in**.
 2. Click **Observability** in the sidebar: about 7 days of synthetic traces (`whatsapp.ingest` -> `whatsapp.route` -> `agent.call` -> `agent.invoke` -> `tool.*`), request/error/latency charts, token counts, estimated cost, a trace waterfall and a mid-week agent-config change marker. **Token usage** shows token totals.
-3. Also worth a look: **Emergency alerts**, **Participants** (reminders, timeline, communications), **Requests**, **Team**. The participant portal is at http://127.0.0.1:8787/participant (sign in with `+1 732 555 0142`, Maria Lopez, same password); its orange adverse-event button raises an alert that appears on the staff side within a few seconds, and its chat talks to a local echo agent.
+3. Also worth a look: **Emergency alerts** (acknowledge and resolve), **Participants** (dose reminders, send now, timeline, adherence, communications), **Requests** (a "Needs attention" list of flagged symptoms, missed doses and failed messages from the last 7 days, then participant questions with one-click replies), **Team**. The participant portal is at http://127.0.0.1:8787/participant (sign in with `+1 732 555 0142`, Maria Lopez, same password); its orange adverse-event button raises an alert that appears on the staff side within a few seconds, and its chat talks to a local echo agent.
 
 Stop with Ctrl+C; the database is deleted. `LC_ALL` sets a UTF-8 locale for the throwaway database: `en_US.UTF-8` on macOS; on Linux use `LC_ALL=C.UTF-8` (minimal images and containers often lack `en_US.UTF-8`, and `initdb` fails without it), or drop the variable if your default locale is already UTF-8. Any modern PostgreSQL bin dir works (the docs target 16; this was also run against 18): point `TT_PG_BIN` at yours. Anything the server would have sent to AWS (WhatsApp messages, SES emails, schedules) is recorded by the fakes and readable at http://127.0.0.1:8787/dev/outbox. Full runbook, including `--real-agent` and the Conda-based setup: [`coordinator-backend/README.md`](coordinator-backend/README.md#testing).
 
@@ -72,7 +71,8 @@ AWS End User Messaging Social --> SNS whatsapp_topic --> tt-ingest Lambda
                                                             |
                                                             v
                                                       tt-router Lambda
-              Layer 0 in code first: STOP/START, emergency keywords (-> SES email + staff alert), dose buttons
+              Layer 0 in code first: STOP/START, emergency keywords (-> staff alert in trial.emergency_alerts
+              + SES email), dose buttons. Unknown numbers chat as the shared demo participant (P-DEMO).
                                                             |
                                                             v
                          Bedrock AgentCore Runtime: trial_agent (Strands + Claude on Bedrock)
@@ -81,15 +81,17 @@ AWS End User Messaging Social --> SNS whatsapp_topic --> tt-ingest Lambda
                                                             v
                          reply --> wa.send_text --> EUM Social --> Participant
 
-Staff browser --> Amplify pages --> Cognito staff pool --> API Gateway HTTP API tt-portal-api (JWT)
-   --> tt-staff-api Lambda (staff API; the participant API, participant_api, is not deployed yet) --> Aurora PostgreSQL via RDS Data API (row-level security)
+Staff browser --> Amplify pages --> Cognito staff pool (tt-staff) --> API Gateway HTTP API tt-portal-api (JWT)
+   --> tt-staff-api Lambda --> Aurora PostgreSQL via RDS Data API (row-level security)
+Participant browser --> Amplify pages --> Cognito participant pool (phone + password) --> API Gateway HTTP API trialtalk-api
+   --> participant API Lambda --> Aurora (own rows only, row-level security); the SOS button writes trial.emergency_alerts
 EventBridge Scheduler (rem-<id>) --> tt-reminder Lambda --> WhatsApp template (+ SES follow-up)
 
 OpenTelemetry: ingest / router / reminder / agent spans (one trace per message, W3C traceparent propagated)
    --> trial.telemetry_spans in Aurora --> staff_api /staff/observability --> Observability dashboard
 ```
 
-Until the documented cutover, `tt-ingest` only logs and the older single `continuum-whatsapp` Lambda still replies; see [`triggers/README.md`](triggers/README.md#switching-on-cutover). Source of truth for the deployed system is what is in AWS (account `180026596905`, us-east-1, resources named `tt-*`), not a CDK app. `agent/trial_agent`, `triggers/` and `coordinator-backend/lambdas` match the deployed code. The original design doc (`TrialTalk build plan.pdf`) is kept out of git.
+The WhatsApp cutover is done: `tt-ingest` forwards every inbound message to `tt-router`, and the older single `continuum-whatsapp` Lambda is unsubscribed from the topic (rollback steps in [`triggers/README.md`](triggers/README.md#switching-on-cutover)). Source of truth for the deployed system is what is in AWS (account `180026596905`, us-east-1, resources named `tt-*`), not a CDK app. `agent/trial_agent`, `triggers/` and `coordinator-backend/lambdas` match the deployed code. The original design doc (`TrialTalk build plan.pdf`) is kept out of git.
 
 ## Deploying to AWS
 
@@ -98,7 +100,8 @@ Deploy is script-driven with an AWS profile; nothing here is needed for the loca
 - Database (Aurora Serverless v2 via Data API): [`db/README.md`](db/README.md)
 - Agent (AgentCore Runtime via the AgentCore CLI): [`agent/README.md`](agent/README.md)
 - Trigger Lambdas, SNS/SQS wiring, schedules, cutover: [`triggers/README.md`](triggers/README.md) (`python triggers/infra/deploy.py --profile <profile>`)
-- Staff API (HTTP API `tt-portal-api`, Lambda `tt-staff-api`), Cognito staff pool, portal pages (the participant API is not deployed yet): [`coordinator-backend/README.md`](coordinator-backend/README.md#deploy) and [`coordinator-frontend/README.md`](coordinator-frontend/README.md) (`python coordinator-backend/infra/deploy_portal.py --profile <profile>` deploys the staff API only)
+- Staff API (HTTP API `tt-portal-api`, Lambda `tt-staff-api`) and Cognito staff pool: [`coordinator-backend/README.md`](coordinator-backend/README.md#deploy) (`python coordinator-backend/infra/deploy_portal.py --profile <profile>` deploys the staff API only). The participant API runs behind `trialtalk-api`.
+- Portal pages: Amplify builds `coordinator-frontend` from `main` (`amplify.yml`); see [`coordinator-frontend/README.md`](coordinator-frontend/README.md). The staff API must list the Amplify origin in its CORS settings (`CORS_ORIGINS` in `deploy_portal.py`).
 - WhatsApp templates and the first staff user are console steps, listed in the backend README.
 
 ## Tests

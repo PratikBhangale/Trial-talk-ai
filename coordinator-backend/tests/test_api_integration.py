@@ -20,9 +20,14 @@ def enroll(call_staff, **overrides):
 # ------------------------------------------------------------------ staff: participants
 
 def test_create_list_and_read_participant(call_staff, aws):
-    pid = enroll(call_staff)
+    status, body = call_staff("POST", "/staff/participants", MARIA)
+    assert status == 201, body
+    pid = body["participant"]["participant_id"]
     assert pid.startswith("P-")
     assert aws.cognito.users[pid]["custom:participant_id"] == pid
+    # The website login gets a temporary password, returned once; Cognito asks for a new one at first sign-in.
+    assert body["temporary_password"] == aws.cognito.passwords[pid]
+    assert aws.cognito.meta[pid]["UserStatus"] == "FORCE_CHANGE_PASSWORD"
 
     status, body = call_staff("GET", "/staff/participants", query={"q": "lopez"})
     assert status == 200 and [p["participant_id"] for p in body["participants"]] == [pid]
@@ -61,6 +66,42 @@ def test_ids_skip_ones_taken_at_sites_you_cannot_see(call_staff):
 def test_duplicate_phone_is_409(call_staff):
     enroll(call_staff)
     assert call_staff("POST", "/staff/participants", MARIA)[0] == 409
+
+
+def test_login_phone_already_in_cognito_is_409_and_enrolls_nobody(call_staff, aws):
+    aws.cognito.admin_create_user(UserPoolId="pool", Username="P-0001", UserAttributes=[
+        {"Name": "phone_number", "Value": MARIA["phone_e164"]}])
+    status, body = call_staff("POST", "/staff/participants", MARIA)
+    assert status == 409 and "phone number" in body["error"]
+    assert call_staff("GET", "/staff/participants")[1]["participants"] == []  # the insert was rolled back
+
+
+def test_reset_login_gives_a_new_temporary_password(call_staff, aws):
+    pid = enroll(call_staff)
+    aws.cognito.admin_set_user_password(Username=pid, Password="Chosen-by-them-1", Permanent=True)
+    status, body = call_staff("POST", f"/staff/participants/{pid}/reset-login")
+    assert status == 200 and body["participant_id"] == pid
+    assert body["temporary_password"] == aws.cognito.passwords[pid] != "Chosen-by-them-1"
+    assert aws.cognito.meta[pid]["UserStatus"] == "FORCE_CHANGE_PASSWORD"
+
+    assert call_staff("POST", f"/staff/participants/{pid}/reset-login", claims=OTHER_SITE_CLAIMS)[0] == 404
+    assert call_staff("POST", "/staff/participants/P-9999/reset-login")[0] == 404
+
+
+def test_reset_login_creates_a_missing_login(call_staff, aws):
+    """Participants enrolled before website logins have no Cognito user yet; a reset creates one."""
+    pid = enroll(call_staff)
+    del aws.cognito.users[pid]
+    status, body = call_staff("POST", f"/staff/participants/{pid}/reset-login")
+    assert status == 200 and aws.cognito.users[pid]["phone_number"] == MARIA["phone_e164"]
+    assert body["temporary_password"] == aws.cognito.passwords[pid]
+
+
+def test_withdrawn_participants_get_no_login_reset(call_staff, aws):
+    pid = enroll(call_staff)
+    call_staff("DELETE", f"/staff/participants/{pid}", {"reason": "participant request"})
+    assert call_staff("POST", f"/staff/participants/{pid}/reset-login")[0] == 409
+    assert pid in aws.cognito.disabled
 
 
 def test_update_participant_identity_needs_reason(call_staff, aws):
