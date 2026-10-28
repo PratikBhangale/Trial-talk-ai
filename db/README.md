@@ -23,6 +23,7 @@ The database is loaded with the synthetic data from `03_seed.sql` (see [Test dat
 | `03_seed.sql` | synthetic test data with fixed IDs |
 | `04_db_tests.sql` | 19 SQL tests (permissions, RLS, append-only, dedupe, versioning) |
 | `05_telemetry.sql` | `trial.telemetry_spans`, where services store OpenTelemetry spans (see [Telemetry](#telemetry)) |
+| `06_alerts_web.sql` | `trial.emergency_alerts` (SOS button and emergency keywords), the `web` channel on `trial.communications`, and the telemetry retention grant (see [Alerts and the web channel](#alerts-and-the-web-channel)) |
 | `99_teardown.sql` | drops everything (destroys data) |
 | `run_sql.py` | runs the files above through the Data API |
 | `TEST_PLAN.md` | plan for testing the Lambdas against the database |
@@ -43,6 +44,10 @@ Which typed columns and `details` keys each `record_type` uses is in the build p
 ## Telemetry
 
 `trial.telemetry_spans` (from `05_telemetry.sql`) stores OpenTelemetry spans: ids, span name, service, start time, duration, status and a small `attrs` jsonb. It is separate from the four tables above and **carries no PHI by design**: no participant identifiers, no message text. The exporter in `lambdas/common/telemetry.py` keeps an attribute allowlist and drops everything else before writing, so never widen it with anything identifying. For that reason the table has no row-level security: `tt_messaging`, `tt_portal` and `tt_participant` get INSERT and SELECT (the exporter's `ON CONFLICT (span_id) DO NOTHING` needs SELECT).
+
+## Alerts and the web channel
+
+`06_alerts_web.sql` adds three things on top of 01-05. **`trial.emergency_alerts`** holds one row per emergency, raised by the participant's SOS button, or by the router when a WhatsApp message contains emergency keywords. Unlike `clinical_events` it has a lifecycle (`open` -> `acknowledged` -> `resolved`) and is updated in place, but rows are never deleted. Repeat presses within 30 minutes fold into the open alert (`press_count`). `tt_portal` triages alerts at the user's sites, `tt_participant` raises and re-presses its own, and `tt_messaging` (the router) can read, insert and update `press_count`, `last_pressed_at` and `message`. The **`web` channel** is now allowed on `trial.communications` for rows written by the participant website (chat, requests, staff replies); participants can read their own web rows and insert their own web chat. Finally `tt_messaging` gets `DELETE` on `trial.telemetry_spans` for the nightly retention prune. Grants and RLS for these live in the same file rather than in `02_roles_rls.sql`. Because `01_schema.sql` already created the channel CHECK, `06` drops and re-adds it, so run `06` once, after `05`.
 
 ## Rules every service must follow
 
@@ -140,7 +145,7 @@ The RDS **Query editor can't run these files**: it splits on every `;`, includin
 pip install boto3 "botocore[crt]"      # the crt extra is needed for `aws login` profiles
 python3 run_sql.py --profile <your-profile> \
   --cluster-arn <cluster ARN> --secret-arn <master secret ARN> \
-  01_schema.sql 02_roles_rls.sql 03_seed.sql 04_db_tests.sql
+  01_schema.sql 02_roles_rls.sql 03_seed.sql 04_db_tests.sql 05_telemetry.sql 06_alerts_web.sql
 ```
 
 - It sends one statement at a time and stops at the first failure.

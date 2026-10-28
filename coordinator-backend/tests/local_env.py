@@ -1,7 +1,7 @@
 """Local stand-ins for AWS, shared by the tests (conftest.py) and the dev server (devserver/server.py).
 
 LocalPostgres runs a throwaway PostgreSQL 16 built from db/ (the schema's source of truth: tables, triggers,
-roles, RLS and the tt_* logins), plus pending_db_additions.sql for the features db/ has no room for yet.
+roles, RLS and the tt_* logins).
 The Fake* classes replace the boto3 clients: FakeRdsData runs Data API calls on that server as the
 same login the Lambda would use, so grants and RLS are exercised for real.
 """
@@ -30,7 +30,7 @@ for _path in (LAMBDAS, DB_SQL):  # DB_SQL for run_sql.split_sql, the splitter wr
 
 # Applied in order to a fresh database. db/ files are not idempotent (plain CREATE TABLE/ROLE/POLICY): once only.
 SCHEMA_FILES = [DB_SQL / "01_schema.sql", DB_SQL / "02_roles_rls.sql", DB_SQL / "05_telemetry.sql",
-                Path(__file__).with_name("pending_db_additions.sql")]
+                DB_SQL / "06_alerts_web.sql"]
 SEED_FILE = DB_SQL / "03_seed.sql"
 
 # boto3 isn't needed locally; every AWS client is replaced with a fake.
