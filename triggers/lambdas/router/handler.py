@@ -84,6 +84,29 @@ def normalize(text):
     return re.sub(r"\s+", " ", (text or "").lower().replace("’", "'")).strip()
 
 
+REPRESS_WINDOW_MIN = 30   # same window as the website SOS: repeats join the open alert instead of a new one
+
+
+def raise_alert(pid, text, words):
+    """Show the emergency in the staff portal's alerts widget. Never raises: a failure here must not stop the
+    participant's emergency reply or the coordinator email."""
+    try:
+        with Tx() as tx:
+            open_alert = tx.one(
+                "SELECT alert_id FROM trial.emergency_alerts WHERE participant_id = :pid AND status <> 'resolved' "
+                "  AND last_pressed_at > now() - make_interval(mins => :mins::int) ORDER BY created_at DESC LIMIT 1",
+                pid=pid, mins=REPRESS_WINDOW_MIN)
+            if open_alert:
+                tx.q("UPDATE trial.emergency_alerts SET press_count = press_count + 1, last_pressed_at = now(), "
+                     "message = :msg::text WHERE alert_id = :id::uuid", id=open_alert["alert_id"], msg=text)
+            else:
+                tx.q("INSERT INTO trial.emergency_alerts (participant_id, severity, source, message, keywords) "
+                     "VALUES (:pid, 'life_threatening', 'chat_keyword', :msg::text, :kw::text[])",
+                     pid=pid, msg=text, kw="{" + ",".join(f'"{w}"' for w in words) + "}")
+    except Exception as e:
+        print(f"emergency alert not recorded for {pid}: {e}")
+
+
 def emergency(m, p, words):
     """Log an urgent SYMPTOM, tell the participant to call emergency services, email the coordinator."""
     with Tx() as tx:
@@ -94,6 +117,8 @@ def emergency(m, p, words):
             RETURNING event_id""",
             pid=p["participant_id"], cid=m["comm_id"], txt=m["text"],
             kw="{" + ",".join(f'"{w}"' for w in words) + "}")
+    if p["status"] != "withdrawn":   # like the website SOS: withdrawn people get the instruction, the team isn't paged
+        raise_alert(p["participant_id"], m["text"], words)
     reply(m, p["participant_id"], p["preferred_language"], t(p["preferred_language"], "emergency"))
     if COORDINATOR_EMAIL and SENDER_EMAIL:
         subject = f"[TT {p['participant_id']} SYM-{ev['event_id'][:4]}] URGENT: emergency keywords on WhatsApp"
