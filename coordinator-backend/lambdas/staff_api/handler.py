@@ -12,10 +12,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import boto3
 
-from common import db, legacy_mirror, scheduling, telemetry
+from common import db, legacy_mirror, scheduling
 from common.auth import Staff, require, staff_claims
 from common.http import HttpError, Router, json_body, query_params
-from staff_api import accounts
+from staff_api import accounts, observability
 
 PARTICIPANT_POOL_ID = os.environ.get("PARTICIPANT_POOL_ID", "")
 REMINDER_FUNCTION_ARN = os.environ.get("REMINDER_FUNCTION_ARN", "")
@@ -27,6 +27,7 @@ DEFAULT_BUTTONS = {"dose": ["Taken", "Skipped", "Remind me in 30 min"], "visit":
 
 router = Router()
 router.include(accounts.router)
+router.include(observability.router)
 _cognito = None
 _lambda = None
 
@@ -517,6 +518,7 @@ def token_usage(event, staff: Staff):
         totals = t.one(f"SELECT coalesce(sum(c.input_tokens), 0) AS input_tokens, "
                        f"coalesce(sum(c.output_tokens), 0) AS output_tokens, count(*) AS calls "
                        f"FROM trial.communications c WHERE {window}", days=days)
+        totals["est_cost_usd"] = observability.est_cost(totals["input_tokens"], totals["output_tokens"])
         by_day = t.query(f"SELECT c.created_at::date AS day, sum(c.input_tokens) AS input_tokens, "
                          f"sum(c.output_tokens) AS output_tokens, count(*) AS calls "
                          f"FROM trial.communications c WHERE {window} GROUP BY 1 ORDER BY 1", days=days)
@@ -525,16 +527,9 @@ def token_usage(event, staff: Staff):
             f"sum(c.output_tokens) AS output_tokens, count(*) AS calls "
             f"FROM trial.communications c JOIN pii.participants p USING (participant_id) WHERE {window} "
             "GROUP BY 1, 2, 3 ORDER BY sum(c.input_tokens) + sum(c.output_tokens) DESC LIMIT 20", days=days)
+    for row in by_day + by_participant:
+        row["est_cost_usd"] = observability.est_cost(row["input_tokens"], row["output_tokens"])
     return 200, {"days": days, "totals": totals, "by_day": by_day, "by_participant": by_participant}
-
-
-# ------------------------------------------------------------------ observability
-
-@router.route("GET", "/staff/observability")
-def observability(event, staff: Staff):
-    """OpenTelemetry window for the staff portal widget: recent spans and request metrics. No PHI in telemetry."""
-    require(staff, "ops:read")
-    return 200, telemetry.snapshot()
 
 
 # ------------------------------------------------------------------ reminders and dosing

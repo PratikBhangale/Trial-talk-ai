@@ -51,10 +51,10 @@
       ]
     },
     {
-      "Sid": "TrialDocsRead",
+      "Sid": "TrialDocsKnowledgeBase",
       "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::trialtalk-kb-docs-180026596905/*"
+      "Action": "bedrock:Retrieve",
+      "Resource": "arn:aws:bedrock:us-east-1:180026596905:knowledge-base/4RKI2MFBQR"
     }
   ]
 }

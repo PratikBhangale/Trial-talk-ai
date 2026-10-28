@@ -7,4 +7,5 @@ dependencies = [
     "bedrock-agentcore[strands-agents]",
     "boto3",
     "PyYAML",
+    "opentelemetry-sdk==1.45.1",  # latest 1.x; within strands-agents' >=1.30,<2 range
 ]

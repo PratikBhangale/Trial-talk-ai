@@ -1,0 +1,8 @@
+# OpenTelemetry for the Lambda zips (triggers/infra/deploy.py and coordinator-backend/infra/deploy_portal.py).
+# Installed with: pip install -r infra-requirements-otel.txt -t <staging> (see build_zip in deploy.py).
+# The versions match the agent bundle's pin. All of these are pure-python wheels, so the build host's
+# architecture does not matter (the Lambdas are python3.12 arm64).
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1
+# opentelemetry-sdk pins opentelemetry-semantic-conventions==0.66b1 itself; typing-extensions only has a floor.
+typing-extensions==4.16.0

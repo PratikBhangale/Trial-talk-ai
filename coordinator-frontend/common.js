@@ -466,7 +466,8 @@ function fmt(v) {
 const ENUM_COLS = new Set(['record_type', 'source', 'response', 'channel', 'direction', 'msg_type', 'delivery_status', 'type', 'state']);
 const COL_LABELS = { record_type: 'Record', occurred_at: 'When', created_at: 'When', happened_at: 'When', item: 'What', participant_id: 'Participant', site_id: 'Site', next_send_at: 'Next send', body_text: 'Message',
   verbatim_text: 'In their words', msg_type: 'Type', template_name: 'Template', delivery_status: 'Delivery', dose_label: 'Dose', n: 'Count',
-  'custom:participant_id': 'Participant ID', phone_number: 'Phone', phone_number_verified: 'Phone verified', reminder_id: 'Reminder ID', id: 'ID' };
+  'custom:participant_id': 'Participant ID', phone_number: 'Phone', phone_number_verified: 'Phone verified', reminder_id: 'Reminder ID', id: 'ID',
+  est_cost: 'Est. cost' };
 
 function table(rows, cols, extra, empty) {
   if (!rows || !rows.length) return empty || emptyState('file', 'Nothing here yet', 'Records appear here as they are created.');

@@ -272,15 +272,56 @@
           <div class="page-head">
             <div>
               <h1 id="h-observability" tabindex="-1">Observability</h1>
-              <p>Requests, errors and latency recorded on this Lambda instance.</p>
+              <p>How the WhatsApp pipeline and the study agent are running: traffic, errors, response time, tokens and estimated cost. Aggregates and timings only, no participant data.</p>
             </div>
             <div class="actions">
-              <span class="live off" id="otelLive"><i></i>Connecting</span>
-              <label class="inline"><input type="checkbox" id="otelSelf"> Include widget polling</label>
-              <button id="otelRefresh" type="button"><span data-icon="refresh"></span>Refresh</button>
+              <span class="live off" id="obsLive"><i></i>Connecting</span>
+              <button id="obsRefresh" type="button"><span data-icon="refresh"></span>Refresh</button>
             </div>
           </div>
-          <div class="panel" id="otelPanel"><div id="otelBody"></div></div>
+          <div id="obsKpis"></div>
+
+          <div class="cols-2 even obs-charts">
+            <div class="panel">
+              <div class="panel-head"><h2>Requests and errors</h2><span class="tag">Last 24 h · 15 min</span></div>
+              <div id="obsRequests"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Entry-point latency</h2><span class="tag">Last 24 h · hourly</span></div>
+              <div id="obsLatency"></div>
+            </div>
+          </div>
+          <div class="panel section-gap">
+            <div class="panel-head"><h2>Tokens per day</h2><span class="tag" id="obsTokensTag">14 days</span></div>
+            <p class="panel-note">Input and output tokens of agent replies at your sites, per UTC day. A flag marks each agent configuration change (prompt, tools or model), so a jump in tokens can be traced to a release.</p>
+            <div id="obsTokens"></div>
+          </div>
+
+          <div class="panel flush section-gap" id="obsTracesPanel">
+            <div class="obs-flush-head">
+              <div class="panel-head"><h2>Recent traces</h2><span class="tag">Newest 50</span></div>
+              <p class="panel-note">One row per inbound message, chat reply or job. Choose one to see where its time went.</p>
+            </div>
+            <div id="obsTraces"></div>
+          </div>
+          <!-- One trace as a waterfall, in the same slide-in card the participant detail uses. -->
+          <dialog class="sheet" id="traceSheet" aria-labelledby="obsTraceTitle">
+            <div class="sheet-bar">
+              <h2 id="obsTraceTitle">Trace</h2>
+              <span class="spacer"></span>
+              <button type="button" class="icon-btn" id="obsTraceClose" aria-label="Close" title="Close (Esc)"><span data-icon="x"></span></button>
+            </div>
+            <div class="sheet-body">
+              <div id="obsTraceMeta"></div>
+              <div id="obsWaterfall"></div>
+            </div>
+          </dialog>
+
+          <div class="panel section-gap">
+            <div class="panel-head"><h2>Behavior drift</h2><span class="tag">Last 24 h vs the 7 days before</span></div>
+            <p class="panel-note">Whether the agent behaves differently today. Red means a change in the direction that hurts (slower, fewer knowledge-base lookups, more escalations); token and length changes are shown without a verdict.</p>
+            <div id="obsDrift"></div>
+          </div>
         </section>
       </div>
     </main>
@@ -289,6 +330,7 @@
 </div>
 
 <script src="/ui/common.js"></script>
+<script src="/ui/charts.js"></script>
 <script src="/ui/widgets.js"></script>
 <script>
 const state = { pid: null, tab: 'events', reminders: [], me: null, page: 'overview' };
@@ -304,6 +346,7 @@ function route(moveFocus) {
   const navPage = page === 'participant' ? 'participants' : page;
   state.page = page;
   closeSheet(page === 'participant');
+  if (page !== 'observability' && $('#traceSheet').open) $('#traceSheet').close();
   $$('[data-page]').forEach(s => { s.hidden = s.dataset.page !== page; });
   setCrumbs(page === 'participant' ? [['Staff', '#/overview'], ['Participants', '#/participants'], [state.pid === decodeURIComponent(sub) && state.detailName ? state.detailName : decodeURIComponent(sub), '']]
     : [['Staff', '#/overview'], [ROUTES[page], '']]);
@@ -324,6 +367,7 @@ function route(moveFocus) {
   setTitle(); syncBanner();
   if (moveFocus) { $(`#h-${page}`)?.focus(); window.scrollTo(0, 0); }
   if (page === 'overview' && TT.user) loadOverview();
+  if (page === 'observability' && TT.user) loadObs();
 }
 addEventListener('hashchange', () => route(true));
 

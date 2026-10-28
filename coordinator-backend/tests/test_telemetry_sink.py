@@ -1,0 +1,270 @@
+"""Durable span sink: DB exporter, attribute allowlist, W3C propagation helpers."""
+
+import json
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+from common import telemetry  # noqa: E402  (imports fine without the SDK: telemetry just becomes a no-op)
+
+
+def _sdk_present() -> bool:
+    try:
+        import importlib.util
+        return importlib.util.find_spec("opentelemetry.sdk") is not None
+    except ImportError:
+        return False
+
+
+# Per-test, not module-level: the copies-identical drift guard and the persist/filter tests must run without the SDK.
+needs_sdk = pytest.mark.skipif(not _sdk_present(), reason="OpenTelemetry SDK not installed")
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class FakeRds:
+    def __init__(self, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def batch_execute_statement(self, **kw):
+        if self.fail:
+            raise RuntimeError("rds down")
+        self.calls.append(kw)
+        return {}
+
+
+@pytest.fixture
+def rds(monkeypatch):
+    fake = FakeRds()
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(client=lambda name, **kw: fake))
+    monkeypatch.setenv("DB_CLUSTER_ARN", "arn:cluster")
+    monkeypatch.setenv("DB_SECRET_ARN", "arn:secret")
+    monkeypatch.setenv("DB_NAME", "trialtalk")
+    monkeypatch.delenv("TELEMETRY_DB_SINK", raising=False)
+    monkeypatch.setattr(telemetry, "_rds", None)
+    telemetry.init(force=True)
+    yield fake
+    monkeypatch.delenv("DB_CLUSTER_ARN")
+    monkeypatch.delenv("DB_SECRET_ARN")
+    telemetry.init(force=True)
+
+
+def rows(fake):
+    """Every parameter set sent, as {name: parameter} dicts (typeHint and all)."""
+    out = []
+    for call in fake.calls:
+        assert "INSERT INTO trial.telemetry_spans" in call["sql"]
+        assert "ON CONFLICT (span_id) DO NOTHING" in call["sql"]
+        for ps in call["parameterSets"]:
+            out.append({p["name"]: p for p in ps})
+    return out
+
+
+def value(p):
+    return next(iter(p["value"].values()))
+
+
+@needs_sdk
+def test_spans_flushed_to_db(rds):
+    with telemetry.span("db SELECT", **{"db.system": "postgresql", "gen_ai.usage.input_tokens": 12}) as s:
+        trace_id = f"{s.get_span_context().trace_id:032x}"
+    telemetry.flush()
+    assert len(rds.calls) == 1
+    assert rds.calls[0]["resourceArn"] == "arn:cluster" and rds.calls[0]["secretArn"] == "arn:secret"
+    assert rds.calls[0]["database"] == "trialtalk"
+    (row,) = rows(rds)
+    assert value(row["name"]) == "db SELECT"
+    assert value(row["trace_id"]) == trace_id
+    assert "doubleValue" in row["duration_ms"]["value"]
+    assert row["attrs"]["typeHint"] == "JSON"
+    assert json.loads(value(row["attrs"]))["db.system"] == "postgresql"
+    assert row["start_ts"]["typeHint"] == "TIMESTAMP"
+    assert len(value(row["start_ts"])) == len("2026-01-01 00:00:00.000")
+
+
+def test_allowlist_drops_non_finite_floats():
+    out = telemetry._filter_attrs({"trialtalk.kb.top_score": float("nan"), "trialtalk.x": float("inf"),
+                                   "trialtalk.ok": 0.5})
+    assert out == {"trialtalk.ok": 0.5}
+
+
+def test_nan_attr_does_not_poison_batch(rds):
+    good = {"span_id": "1" * 16, "name": "a", "start": "2026-05-01T10:00:00+00:00", "duration_ms": 1, "status": "OK",
+            "kind": "INTERNAL", "attributes": {"trialtalk.kb.top_score": float("nan"), "trialtalk.n": 1}}
+    telemetry.persist_spans([good, {**good, "span_id": "2" * 16}], "svc", "e" * 32)
+    got = rows(rds)
+    assert len(got) == 2
+    assert json.loads(value(got[0]["attrs"])) == {"trialtalk.n": 1}
+
+
+def test_rds_client_has_short_timeouts(monkeypatch):
+    pytest.importorskip("botocore")
+    seen = {}
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(
+        client=lambda name, **kw: seen.update(kw) or FakeRds()))
+    monkeypatch.setattr(telemetry, "_rds", None)
+    telemetry._rds_client()
+    cfg = seen["config"]
+    assert cfg.connect_timeout <= 2 and cfg.read_timeout <= 3 and cfg.retries["max_attempts"] == 1
+
+
+def test_allowlist_drops_phi_and_long_values():
+    out = telemetry._filter_attrs({
+        "body_text": "hello", "phone": "+15555550100", "gen_ai.usage.input_tokens": 7,
+        "http.route": "x" * 300, "http.request.method": "GET", "trialtalk.note": "y" * 200,
+    })
+    assert out == {"gen_ai.usage.input_tokens": 7, "http.request.method": "GET", "trialtalk.note": "y" * 200}
+
+
+@needs_sdk
+def test_db_failure_never_raises(rds):
+    rds.fail = True
+    with telemetry.span("work"):
+        pass
+    telemetry.flush()
+    telemetry.persist_spans([{"span_id": "a" * 16, "name": "n", "start": "2026-01-01T00:00:00+00:00",
+                              "duration_ms": 1, "status": "OK", "kind": "INTERNAL", "attributes": {}}],
+                            "trial-agent", "b" * 32)
+
+
+def test_persist_spans_inserts_agent_format(rds):
+    spans = [
+        {"span_id": "1" * 16, "parent_id": None, "name": "invoke_agent", "start": "2026-05-01T10:00:00.123+00:00",
+         "duration_ms": 850.5, "status": "OK", "kind": "SERVER",
+         "attributes": {"gen_ai.request.model": "m", "patient_name": "Jane", "faas.name": "f"}},
+        {"span_id": "2" * 16, "parent_id": "1" * 16, "name": "tool", "start": "2026-05-01T10:00:00.200Z",
+         "duration_ms": 20, "status": "ERROR", "kind": "INTERNAL", "attributes": {}},
+    ]
+    telemetry.persist_spans(spans, "trial-agent", "c" * 32)
+    got = rows(rds)
+    assert len(got) == 2
+    assert {value(r["service"]) for r in got} == {"trial-agent"}
+    assert {value(r["trace_id"]) for r in got} == {"c" * 32}
+    first, second = got
+    assert value(first["name"]) == "invoke_agent" and value(first["start_ts"]) == "2026-05-01 10:00:00.123"
+    assert first["parent_id"]["value"].get("isNull") is True
+    assert value(second["parent_id"]) == "1" * 16 and value(second["status"]) == "ERROR"
+    assert value(second["start_ts"]) == "2026-05-01 10:00:00.200"
+    assert json.loads(value(first["attrs"])) == {"gen_ai.request.model": "m", "faas.name": "f"}
+
+
+def test_persist_spans_noop_without_db_env(monkeypatch):
+    monkeypatch.delenv("DB_CLUSTER_ARN", raising=False)
+    telemetry.persist_spans([{"span_id": "1" * 16, "name": "x"}], "svc", "d" * 32)  # must not raise
+
+
+@needs_sdk
+def test_db_sink_can_be_disabled(rds, monkeypatch):
+    monkeypatch.setenv("TELEMETRY_DB_SINK", "0")
+    telemetry.init(force=True)
+    with telemetry.span("work"):
+        pass
+    telemetry.flush()
+    assert rds.calls == []
+
+
+@needs_sdk
+def test_traceparent_roundtrip():
+    telemetry.init(force=True)
+    assert telemetry.traceparent() is None  # no active span
+    with telemetry.span("outer") as s:
+        tp = telemetry.traceparent()
+        sc = s.get_span_context()
+    version, trace_id, span_id, flags = tp.split("-")
+    assert (version, trace_id, span_id) == ("00", f"{sc.trace_id:032x}", f"{sc.span_id:016x}")
+    ctx = telemetry.context_from(tp)
+    assert ctx is not None
+    from opentelemetry import trace
+    assert trace.get_current_span(ctx).get_span_context().trace_id == sc.trace_id
+    assert telemetry.context_from("garbage") is None
+    assert telemetry.context_from(None) is None
+
+
+@needs_sdk
+def test_span_kind_lands_on_exported_span():
+    telemetry.init(force=True)
+    with telemetry.span("consume", kind="CONSUMER"):
+        with telemetry.span("call", kind="client"):
+            with telemetry.span("plain"):
+                pass
+    kinds = {s["name"]: s["kind"] for s in telemetry.snapshot()["spans"]}
+    assert kinds == {"consume": "CONSUMER", "call": "CLIENT", "plain": "INTERNAL"}
+
+
+@needs_sdk
+def test_span_continues_remote_traceparent():
+    telemetry.init(force=True)
+    remote = "00-" + "ab" * 16 + "-" + "cd" * 8 + "-01"
+    with telemetry.span("handle", kind="CONSUMER", context_carrier=remote, **{"trialtalk.x": 1}):
+        pass
+    (s,) = telemetry.snapshot()["spans"]
+    assert s["trace_id"] == "ab" * 16 and s["parent_id"] == "cd" * 8
+    assert s["attributes"]["trialtalk.x"] == 1
+
+
+@needs_sdk
+def test_span_garbage_traceparent_starts_fresh_trace():
+    telemetry.init(force=True)
+    with telemetry.span("handle", context_carrier="garbage"):
+        pass
+    (s,) = telemetry.snapshot()["spans"]
+    assert s["parent_id"] is None and len(s["trace_id"]) == 32
+
+
+def test_span_accepts_new_args_without_sdk(monkeypatch):
+    monkeypatch.setattr(telemetry, "AVAILABLE", False)
+    monkeypatch.setattr(telemetry, "_state", {})
+    with telemetry.span("x", kind="CONSUMER", context_carrier="garbage", a=1) as s:
+        s.set_attribute("k", 1)
+
+
+def test_persist_spans_respects_sink_off_switch(rds, monkeypatch):
+    monkeypatch.setenv("TELEMETRY_DB_SINK", "0")
+    span = {"span_id": "1" * 16, "name": "a", "start": "2026-05-01T10:00:00+00:00", "duration_ms": 1, "status": "OK",
+            "kind": "INTERNAL", "attributes": {}}
+    telemetry.persist_spans([span], "trial-agent", "f" * 32)
+    assert rds.calls == []
+
+
+def test_persist_spans_works_without_sdk(rds, monkeypatch):
+    monkeypatch.setattr(telemetry, "AVAILABLE", False)
+    monkeypatch.setattr(telemetry, "_state", {})
+    span = {"span_id": "1" * 16, "name": "a", "start": "2026-05-01T10:00:00+00:00", "duration_ms": 1, "status": "OK",
+            "kind": "INTERNAL", "attributes": {}}
+    telemetry.persist_spans([span], "trial-agent", "f" * 32)
+    assert len(rows(rds)) == 1
+
+
+@needs_sdk
+def test_init_failure_disables_telemetry_without_raising(monkeypatch):
+    monkeypatch.setattr(telemetry, "_init_failed", False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.invalid:4318")
+
+    def boom():
+        raise ValueError("malformed OTEL_* env")
+
+    monkeypatch.setattr(telemetry, "_otlp_exporter", boom)
+    try:
+        assert telemetry.init(force=True) is False
+        assert telemetry.enabled() is False
+        with telemetry.span("x", kind="CONSUMER", context_carrier="garbage") as s:
+            s.set_attribute("k", 1)
+        assert telemetry.traceparent() is None
+        telemetry.count("trialtalk.x")
+        telemetry.flush()
+        assert telemetry.snapshot()["enabled"] is False
+        # no retry storm: a plain init() stays a cheap False even after the cause is gone
+        monkeypatch.setattr(telemetry, "_otlp_exporter", lambda: None)
+        assert telemetry.init() is False
+    finally:
+        monkeypatch.undo()
+        assert telemetry.init(force=True) is True
+
+
+def test_telemetry_copies_identical():
+    a = (ROOT / "coordinator-backend/lambdas/common/telemetry.py").read_bytes()
+    b = (ROOT / "triggers/lambdas/common/telemetry.py").read_bytes()
+    assert a == b

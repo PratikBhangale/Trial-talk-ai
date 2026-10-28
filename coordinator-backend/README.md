@@ -9,7 +9,7 @@ Cognito (staff pool | participant pool) → API Gateway HTTP API (JWT authorizer
   → staff_api / participant_api Lambda (per-action check) → RDS Data API → Aurora PostgreSQL (RLS)
   → staff_api /staff/accounts → Cognito staff pool (no database access for these routes)
 participant SOS button → participant_api → trial.emergency_alerts + immediate SES email → staff alerts widget
-every request → OpenTelemetry spans + metrics → staff observability widget (and OTLP, if configured)
+trigger Lambdas + agent → OpenTelemetry spans → trial.telemetry_spans → staff Observability dashboard
 staff reminder actions → EventBridge Scheduler rem-<reminder_id> → reminder Lambda → WhatsApp template
 participant chat → participant_api → Layer 0 emergency check → AgentCore Runtime (trial_agent)
 ```
@@ -112,12 +112,16 @@ Each change prints an `audit` line to CloudWatch.
 
 | Method | Path | What it does |
 | --- | --- | --- |
-| GET | `/staff/observability` | Recent spans (grouped into traces) and request metrics from this Lambda instance |
+| GET | `/staff/observability?hours=` | Dashboard payload: requests, error rate, p50/p95 latency, tokens and estimated cost; request, latency and token series; behavior drift (last 24 h against the 7 days before) |
+| GET | `/staff/observability/traces?limit=` | Most recent traces, one row per trace |
+| GET | `/staff/observability/traces/{trace_id}` | Every span of one trace (the waterfall) |
 
 `common/telemetry.py` uses the real OpenTelemetry SDK: a server span per request named by route template (`GET /staff/alerts`, never the URL), child spans for every database call (SQL verb only), the agent and WhatsApp, a `http.server.request.duration` histogram and counters such as `trialtalk.alerts.raised`. It continues an incoming W3C `traceparent`. No participant ids, SQL text or bodies go into telemetry (a test checks this).
 
-- Without the SDK installed it does nothing, and the widget says so.
-- The widget's window is per Lambda instance. For fleet-wide data set the `otlpEndpoint` CDK context (OTLP/HTTP) and `otelLayerArn` (a layer that carries `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http`, e.g. ADOT). They are empty by default; the infra change has not been synthesized or deployed.
+The endpoints read `trial.telemetry_spans`, which the trigger Lambdas write (`TELEMETRY_DB_SINK=1`) along with the agent's own spans from web chat, and token counts from `trial.communications`. A trace's root is its earliest span with no stored parent, so a trace whose root span was never stored still shows up, once. A request counts as failed when any span of its trace is `ERROR`, not just the root.
+
+- Without the SDK installed `common/telemetry.py` records nothing; the dashboard still shows whatever spans are stored.
+- `tt-staff-api` does not store its own request spans (`TELEMETRY_DB_SINK=0`): the dashboard polls it every few seconds, and those spans would bury the pipeline traces. To export them anyway, set `OTEL_EXPORTER_OTLP_ENDPOINT` and bundle `opentelemetry-exporter-otlp-proto-http`, which the zip does not include.
 
 ### Participant (`custom:participant_id` from the token; never from the request)
 
@@ -194,6 +198,8 @@ The pages live in [`../coordinator-frontend`](../coordinator-frontend): plain HT
 - **`/staff`** (coordinators and PIs): one page per task in the sidebar. **Overview** (open alerts, enrollment by site, participants who may need a check-in), **Emergency alerts** (refreshes every 4 s, sounds on a new one, acknowledge / resolve), **Participants** (enroll, edit, withdraw; dose, visit or one-time reminders: pause, resume, change the time, send now, cancel; timeline, adherence, communications), **Requests** (quick or written replies, each with a 5 s undo), **Team** (invite, edit, disable, reset staff accounts), **Token usage** and **Observability** (requests, error rate, latency, counters).
 - **`/participant`**: an orange **I need to report an adverse event** button (one press, no input; sends `severity: "urgent"`) that shows the instruction and then a live status timeline; dose schedule, profile, history, requests, and chat. The emergency keyword buttons show the Layer 0 path.
 
+`--seed-telemetry` fills the staff **Observability** dashboard: about 7 days of synthetic traces (`whatsapp.ingest` -> `whatsapp.route` -> `agent.call` -> `agent.invoke` -> `tool.*`, some ERRORs, a mid-week agent config change) in `trial.telemetry_spans`, plus a token-bearing outbound message per agent reply in `trial.communications`. Every synthetic span has `"trialtalk.synthetic": true` in its attributes, messages use a `synthetic-...` session id, nothing carries a name, phone or real message text, and **Reset data** re-creates it. Web chat also records what the agent returns: tokens and model on the reply's `communications` row, and the agent's spans (stored as service `trial-agent`) via `telemetry.persist_spans`; the fake agent (`FakeAgentCore`) returns the real contract with random 300-900 / 60-250 token counts.
+
 What would have gone to AWS (schedules, WhatsApp, SES emails, agent calls, both user pools) is still recorded by the fakes and readable at `GET /dev/outbox`; `POST /dev/fire/<reminder_id>` fires a schedule the way Scheduler would.
 
 Sign in at `/` with a phone number and the shared local password `TrialTalk-Demo-2026!` (checked by `POST /dev/sign-in`; the page fills in the default login, Jamie Fox at `+1 555 010 0100`). Participants use the phone number on their record; the local staff numbers are listed in [the frontend README](../coordinator-frontend/README.md#sign-in-and-sign-out). Once signed in, the account menu can switch local accounts or load the **Worst case** test data. The server builds the token claims from fake user pools the way Cognito would, including the real staff pre-token trigger. Sign-in follows those pools:
@@ -212,6 +218,8 @@ python coordinator-backend/infra/deploy_portal.py --profile admin-ai-demo
 python coordinator-backend/infra/staff_token.py --email you@example.org   # sign in as staff
 python coordinator-backend/infra/portal_ui.py --email you@example.org     # staff page on the real API: http://127.0.0.1:8788/staff
 ```
+
+The zip (all of `lambdas/` except `migrate/`) also bundles the pinned OpenTelemetry SDK from [`../infra-requirements-otel.txt`](../infra-requirements-otel.txt), and the trace and metric endpoints read the spans the trigger Lambdas store in AWS. `tt-staff-api` itself is deployed with `TELEMETRY_DB_SINK=0`, so the dashboard's own polling doesn't fill the table. The OTel wheels are pure Python, so the build host's architecture does not matter. `tests/test_deploy_zip.py` checks the packaging without AWS.
 
 The reminder Lambda is `tt-reminder` (`triggers/lambdas/reminder`); `lambdas/reminder` here is not deployed. `lambdas/migrate` is not deployed either: the database is built from [`../db`](../db). The CDK app that used to live in `infra/` was removed (it is in git history); it created a second, unused stack set.
 
