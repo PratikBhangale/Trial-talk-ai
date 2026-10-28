@@ -234,13 +234,13 @@ def seed() -> None:
         {"Name": "email", "Value": boot["email"]}, {"Name": "name", "Value": boot["name"]},
         {"Name": "custom:site_ids", "Value": ",".join(boot["site_ids"])},
         {"Name": "custom:study_ids", "Value": ",".join(boot["study_ids"])}])
-    pool.admin_set_user_password(Username=boot["email"])
+    pool.admin_set_user_password(Username=boot["email"], Permanent=True)
     pool.admin_add_user_to_group(UserPoolId="", Username=boot["email"], GroupName=boot["role"])
     lead = staff_token(boot["email"])
     for user in SEED_STAFF:
         status, out = call_handler(staff, None, lead, "POST", "/staff/accounts", json.dumps(user).encode(), {})
         assert status == 201, out
-        pool.admin_set_user_password(Username=user["email"])  # as if they finished first sign-in
+        pool.admin_set_user_password(Username=user["email"], Permanent=True)  # as if they finished first sign-in
 
     # What staff_api did for the seeded rows when they were created: website logins and reminder schedules.
     participants = admin_query("SELECT participant_id, phone_e164 FROM pii.participants ORDER BY participant_id")
