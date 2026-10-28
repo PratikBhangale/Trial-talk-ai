@@ -60,36 +60,45 @@ infra-requirements-otel.txt   Pinned OpenTelemetry SDK bundled into the Lambda z
 amplify.yml            Amplify build for coordinator-frontend
 ```
 
-```
-Participant (WhatsApp)
-   |
-   v
-AWS End User Messaging Social --> SNS whatsapp_topic --> tt-ingest Lambda
-                                                            | (dedupe, log, Aurora)
-                                                            v
-                                               SQS FIFO tt-inbound (group = phone)
-                                                            |
-                                                            v
-                                                      tt-router Lambda
-              Layer 0 in code first: STOP/START, emergency keywords (-> staff alert in trial.emergency_alerts
-              + SES email), dose buttons. Unknown numbers chat as the shared demo participant (P-DEMO).
-                                                            |
-                                                            v
-                         Bedrock AgentCore Runtime: trial_agent (Strands + Claude on Bedrock)
-                           tools: search_trial_docs (Bedrock Knowledge Base), escalate_to_coordinator (SES)
-                                                            |
-                                                            v
-                         reply --> wa.send_text --> EUM Social --> Participant
+**A WhatsApp message**
 
-Staff browser --> Amplify pages --> Cognito staff pool (tt-staff) --> API Gateway HTTP API tt-portal-api (JWT)
-   --> tt-staff-api Lambda --> Aurora PostgreSQL via RDS Data API (row-level security)
-Participant browser --> Amplify pages --> Cognito participant pool (phone + password) --> API Gateway HTTP API trialtalk-api
-   --> participant API Lambda --> Aurora (own rows only, row-level security); the SOS button writes trial.emergency_alerts
-EventBridge Scheduler (rem-<id>) --> tt-reminder Lambda --> WhatsApp template (+ SES follow-up)
-
-OpenTelemetry: ingest / router / reminder / agent spans (one trace per message, W3C traceparent propagated)
-   --> trial.telemetry_spans in Aurora --> staff_api /staff/observability --> Observability dashboard
+```mermaid
+flowchart LR
+  P["Participant<br/>WhatsApp"] --> EUM["AWS End User<br/>Messaging Social"]
+  EUM --> SNS["SNS<br/>whatsapp_topic"]
+  SNS --> ING["tt-ingest<br/>dedupe, log to Aurora"]
+  ING --> SQS["SQS FIFO tt-inbound<br/>group = phone"]
+  SQS --> RT["tt-router<br/>Layer 0 checks in code"]
+  RT -->|"emergency keyword"| ALERT["Staff alert in<br/>trial.emergency_alerts<br/>+ SES email"]
+  RT -->|"dose button"| DOSE["Dose recorded<br/>in Aurora"]
+  RT -->|"everything else<br/>unknown numbers chat as P-DEMO"| AG["AgentCore Runtime<br/>trial_agent: Strands + Claude"]
+  AG -->|"search_trial_docs"| KB["Bedrock<br/>Knowledge Base"]
+  AG -->|"escalate_to_coordinator"| SES["SES email<br/>to coordinator"]
+  AG --> REPLY["Reply sent through<br/>End User Messaging Social"]
+  REPLY --> P
 ```
+
+**Portals, reminders and observability**
+
+```mermaid
+flowchart LR
+  SB["Staff browser<br/>Amplify pages"] --> CS["Cognito<br/>tt-staff pool"]
+  CS --> APIS["API Gateway<br/>tt-portal-api, JWT"]
+  APIS --> LS["tt-staff-api<br/>Lambda"]
+  LS --> DB[("Aurora PostgreSQL<br/>RDS Data API + row-level security")]
+  PB["Participant browser<br/>Amplify pages"] --> CP["Cognito<br/>participant pool"]
+  CP --> APIP["API Gateway<br/>trialtalk-api, JWT"]
+  APIP --> LP["participant API<br/>Lambda"]
+  LP --> DB
+  LP -->|"SOS button"| ALERTS["trial.emergency_alerts"]
+  LS -->|"create or edit reminder"| EB["EventBridge Scheduler<br/>one rem-id schedule per reminder"]
+  EB --> REM["tt-reminder<br/>Lambda"]
+  REM --> WA["WhatsApp template<br/>+ SES follow-up"]
+  REM --> DB
+  TEL["OpenTelemetry spans<br/>ingest, router, reminder, agent"] --> DB
+  DB --> OBS["Observability dashboard<br/>staff portal"]
+```
+
 
 The WhatsApp cutover is done: `tt-ingest` forwards every inbound message to `tt-router`, and the older single `continuum-whatsapp` Lambda is unsubscribed from the topic (rollback steps in [`triggers/README.md`](triggers/README.md#switching-on-cutover)). Source of truth for the deployed system is what is in AWS (account `180026596905`, us-east-1, resources named `tt-*`), not a CDK app. `agent/trial_agent`, `triggers/` and `coordinator-backend/lambdas` match the deployed code. The original design doc (`TrialTalk build plan.pdf`) is kept out of git.
 
