@@ -28,7 +28,7 @@ for _path in (LAMBDAS, DB_SQL):  # DB_SQL for run_sql.split_sql, the splitter wr
         sys.path.insert(0, str(_path))
 
 # Applied in order to a fresh database. db/ files are not idempotent (plain CREATE TABLE/ROLE/POLICY): once only.
-SCHEMA_FILES = [DB_SQL / "01_schema.sql", DB_SQL / "02_roles_rls.sql",
+SCHEMA_FILES = [DB_SQL / "01_schema.sql", DB_SQL / "02_roles_rls.sql", DB_SQL / "05_telemetry.sql",
                 Path(__file__).with_name("pending_db_additions.sql")]
 SEED_FILE = DB_SQL / "03_seed.sql"
 

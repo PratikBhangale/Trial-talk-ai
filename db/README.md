@@ -22,6 +22,7 @@ The database is loaded with the synthetic data from `03_seed.sql` (see [Test dat
 | `02_roles_rls.sql` | roles, login users, column grants and row-level security. Passwords are `CHANGE_ME` placeholders; the real ones live only in Secrets Manager |
 | `03_seed.sql` | synthetic test data with fixed IDs |
 | `04_db_tests.sql` | 19 SQL tests (permissions, RLS, append-only, dedupe, versioning) |
+| `05_telemetry.sql` | `trial.telemetry_spans`, where services store OpenTelemetry spans (see [Telemetry](#telemetry)) |
 | `99_teardown.sql` | drops everything (destroys data) |
 | `run_sql.py` | runs the files above through the Data API |
 | `TEST_PLAN.md` | plan for testing the Lambdas against the database |
@@ -38,6 +39,10 @@ All four join on `participant_id` (e.g. `'P-0142'`).
 | `trial.reminders` | every reminder staff set: template, schedule, state | updated in place; never deleted (set `status = 'cancelled'`) |
 
 Which typed columns and `details` keys each `record_type` uses is in the build plan PDF ("Data model" section) and in the comments in `01_schema.sql`.
+
+## Telemetry
+
+`trial.telemetry_spans` (from `05_telemetry.sql`) stores OpenTelemetry spans: ids, span name, service, start time, duration, status and a small `attrs` jsonb. It is separate from the four tables above and **carries no PHI by design**: no participant identifiers, no message text. The exporter in `lambdas/common/telemetry.py` keeps an attribute allowlist and drops everything else before writing, so never widen it with anything identifying. For that reason the table has no row-level security: `tt_messaging` and `tt_portal` can insert, only `tt_portal` can read.
 
 ## Rules every service must follow
 
