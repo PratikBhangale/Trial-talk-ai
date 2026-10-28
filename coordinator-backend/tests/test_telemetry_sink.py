@@ -221,6 +221,49 @@ def test_span_accepts_new_args_without_sdk(monkeypatch):
         s.set_attribute("k", 1)
 
 
+def test_persist_spans_respects_sink_off_switch(rds, monkeypatch):
+    monkeypatch.setenv("TELEMETRY_DB_SINK", "0")
+    span = {"span_id": "1" * 16, "name": "a", "start": "2026-05-01T10:00:00+00:00", "duration_ms": 1, "status": "OK",
+            "kind": "INTERNAL", "attributes": {}}
+    telemetry.persist_spans([span], "trial-agent", "f" * 32)
+    assert rds.calls == []
+
+
+def test_persist_spans_works_without_sdk(rds, monkeypatch):
+    monkeypatch.setattr(telemetry, "AVAILABLE", False)
+    monkeypatch.setattr(telemetry, "_state", {})
+    span = {"span_id": "1" * 16, "name": "a", "start": "2026-05-01T10:00:00+00:00", "duration_ms": 1, "status": "OK",
+            "kind": "INTERNAL", "attributes": {}}
+    telemetry.persist_spans([span], "trial-agent", "f" * 32)
+    assert len(rows(rds)) == 1
+
+
+@needs_sdk
+def test_init_failure_disables_telemetry_without_raising(monkeypatch):
+    monkeypatch.setattr(telemetry, "_init_failed", False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.invalid:4318")
+
+    def boom():
+        raise ValueError("malformed OTEL_* env")
+
+    monkeypatch.setattr(telemetry, "_otlp_exporter", boom)
+    try:
+        assert telemetry.init(force=True) is False
+        assert telemetry.enabled() is False
+        with telemetry.span("x", kind="CONSUMER", context_carrier="garbage") as s:
+            s.set_attribute("k", 1)
+        assert telemetry.traceparent() is None
+        telemetry.count("trialtalk.x")
+        telemetry.flush()
+        assert telemetry.snapshot()["enabled"] is False
+        # no retry storm: a plain init() stays a cheap False even after the cause is gone
+        monkeypatch.setattr(telemetry, "_otlp_exporter", lambda: None)
+        assert telemetry.init() is False
+    finally:
+        monkeypatch.undo()
+        assert telemetry.init(force=True) is True
+
+
 def test_telemetry_copies_identical():
     a = (ROOT / "coordinator-backend/lambdas/common/telemetry.py").read_bytes()
     b = (ROOT / "triggers/lambdas/common/telemetry.py").read_bytes()

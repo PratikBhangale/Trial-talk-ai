@@ -52,6 +52,7 @@ _INSERT_SQL = (
 
 _rds = None
 _warned = False
+_init_failed = False  # init() raised once: stay disabled (cheap no-ops) instead of retrying on every call
 
 
 def _warn(what: str, exc: Exception) -> None:
@@ -128,7 +129,7 @@ def _param_set(row: dict) -> list:
 
 def _insert(rows: list[dict]) -> None:
     """Write rows (each: span_id, trace_id, parent_id, name, service, kind, start, duration_ms, status, attributes)."""
-    if not rows or not _db_configured():
+    if not rows or not _db_configured() or os.environ.get("TELEMETRY_DB_SINK") == "0":
         return
     try:
         client = _rds_client()
@@ -223,41 +224,55 @@ if AVAILABLE:
 
 
 def init(*, force: bool = False) -> bool:
-    """Idempotent. Returns True when telemetry is active."""
+    """Idempotent. Returns True when telemetry is active. Never raises: a construction failure disables telemetry."""
+    global _init_failed
     if not AVAILABLE:
         return False
     with _lock:
         if _state and not force:
             return True
-        old = _state.get("tracer_provider")
-        if old is not None:
-            try:
-                old.shutdown()  # stop a previous BatchSpanProcessor thread
-            except Exception:
-                pass
-        service = os.environ.get("OTEL_SERVICE_NAME") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or "trialtalk"
-        resource = Resource.create({"service.name": service, "deployment.environment":
-                                    os.environ.get("DEPLOY_ENV", "dev")})
-        ring = _RingExporter()
-        tracer_provider = TracerProvider(resource=resource)
-        tracer_provider.add_span_processor(SimpleSpanProcessor(ring))
-        reader = InMemoryMetricReader()
-        meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
-        otlp = _otlp_exporter()
-        if otlp:
-            tracer_provider.add_span_processor(SimpleSpanProcessor(otlp))
-        if _db_configured() and os.environ.get("TELEMETRY_DB_SINK") != "0":
-            tracer_provider.add_span_processor(BatchSpanProcessor(_DbExporter()))
-        meter = meter_provider.get_meter("trialtalk")
-        _state.clear()
-        _state.update(
-            ring=ring, reader=reader, service=service, otlp=bool(otlp), tracer=tracer_provider.get_tracer("trialtalk"),
-            tracer_provider=tracer_provider, counters={},
-            request_duration=meter.create_histogram(
-                "http.server.request.duration", unit="s", description="HTTP server request duration"),
-            meter=meter,
-        )
-        return True
+        if _init_failed and not force:
+            return False
+        try:
+            _build()
+            _init_failed = False
+            return True
+        except Exception as exc:
+            _init_failed = True
+            _state.clear()
+            _warn("init", exc)
+            return False
+
+
+def _build() -> None:
+    old = _state.get("tracer_provider")
+    if old is not None:
+        try:
+            old.shutdown()  # stop a previous BatchSpanProcessor thread
+        except Exception:
+            pass
+    service = os.environ.get("OTEL_SERVICE_NAME") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or "trialtalk"
+    resource = Resource.create({"service.name": service, "deployment.environment":
+                                os.environ.get("DEPLOY_ENV", "dev")})
+    ring = _RingExporter()
+    tracer_provider = TracerProvider(resource=resource)
+    tracer_provider.add_span_processor(SimpleSpanProcessor(ring))
+    reader = InMemoryMetricReader()
+    meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
+    otlp = _otlp_exporter()
+    if otlp:
+        tracer_provider.add_span_processor(SimpleSpanProcessor(otlp))
+    if _db_configured() and os.environ.get("TELEMETRY_DB_SINK") != "0":
+        tracer_provider.add_span_processor(BatchSpanProcessor(_DbExporter()))
+    meter = meter_provider.get_meter("trialtalk")
+    _state.clear()
+    _state.update(
+        ring=ring, reader=reader, service=service, otlp=bool(otlp), tracer=tracer_provider.get_tracer("trialtalk"),
+        tracer_provider=tracer_provider, counters={},
+        request_duration=meter.create_histogram(
+            "http.server.request.duration", unit="s", description="HTTP server request duration"),
+        meter=meter,
+    )
 
 
 def _otlp_exporter():
