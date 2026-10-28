@@ -1,0 +1,60 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+      {
+      "Sid": "AuroraDataApi",
+      "Effect": "Allow",
+      "Action": [
+        "rds-data:BeginTransaction",
+        "rds-data:ExecuteStatement",
+        "rds-data:CommitTransaction",
+        "rds-data:RollbackTransaction"
+      ],
+      "Resource": "arn:aws:rds:us-east-1:180026596905:cluster:trialtalk"
+    },
+    {
+      "Sid": "AgentDbLogin",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:us-east-1:180026596905:secret:trialtalk/db/tt_agent-fKlPne"
+    },
+    {
+      "Sid": "AgentMemory",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateEvent",
+        "bedrock-agentcore:GetEvent",
+        "bedrock-agentcore:ListEvents",
+        "bedrock-agentcore:DeleteEvent",
+        "bedrock-agentcore:ListSessions",
+        "bedrock-agentcore:RetrieveMemoryRecords"
+      ],
+      "Resource": "arn:aws:bedrock-agentcore:us-east-1:180026596905:memory/trial_agent_memory-LfUMHsApOY"
+    },
+    {
+      "Sid": "KnowledgeBaseRetrieve",
+      "Effect": "Allow",
+      "Action": "bedrock:Retrieve",
+      "Resource": "arn:aws:bedrock:us-east-1:180026596905:knowledge-base/4RKI2MFBQR"
+    },
+    {
+      "Sid": "SesSend",
+      "Effect": "Allow",
+      "Action": ["ses:SendEmail"],
+      "Resource": [
+        "arn:aws:ses:us-east-1:180026596905:identity/*",
+        "arn:aws:ses:us-east-1:180026596905:configuration-set/*"
+      ]
+    },
+    {
+      "Sid": "Claude",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1:180026596905:inference-profile/global.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6*",
+        "arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-4-6*"
+      ]
+    }
+  ]
+}

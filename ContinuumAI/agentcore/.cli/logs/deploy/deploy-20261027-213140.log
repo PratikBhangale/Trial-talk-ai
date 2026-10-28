@@ -1,0 +1,53 @@
+================================================================================
+AGENTCORE DEPLOY LOG
+Command: deploy
+Started: 2026-10-28T01:31:40.346Z
+================================================================================
+
+
+[21:31:40] STEP: Load deployment target
+[21:31:42] Status: SUCCESS
+[21:31:42] Duration: 1.7s
+
+[21:31:42] STEP: Validate project
+[21:31:44] Status: SUCCESS
+[21:31:44] Duration: 2.3s
+
+[21:31:45] STEP: Sync CDK dependencies
+[21:32:02] Updated managed dependencies in agentcore/cdk/package.json:
+
+  @aws/agentcore-cdk  0.1.0-alpha.54 → 0.1.0-alpha.55
+
+Ran npm install in agentcore/cdk to apply the updates.
+Dependencies you added yourself were not changed.
+[21:32:02] Status: SUCCESS
+[21:32:02] Duration: 17.1s
+
+[21:32:02] STEP: Build CDK project
+[21:32:06] Status: SUCCESS
+[21:32:06] Duration: 4.7s
+
+[21:32:06] STEP: Synthesize CloudFormation
+[21:32:19] Status: SUCCESS
+[21:32:19] Duration: 13.0s
+
+[21:32:19] STEP: Check bootstrap status
+[21:32:20] Status: SUCCESS
+[21:32:20] Duration: 922ms
+
+[21:32:20] STEP: Check stack status
+[21:32:21] Status: SUCCESS
+[21:32:21] Duration: 1.1s
+
+[21:32:21] STEP: Deploy to AWS
+[21:32:59] Status: SUCCESS
+[21:32:59] Duration: 37.4s
+
+[21:32:59] STEP: Persist deployment state
+[21:33:00] Status: SUCCESS
+[21:33:00] Duration: 848ms
+
+================================================================================
+COMPLETED SUCCESSFULLY
+Total Duration: 1m 23s
+================================================================================

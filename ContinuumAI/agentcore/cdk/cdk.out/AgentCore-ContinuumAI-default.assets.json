@@ -1,0 +1,36 @@
+{
+  "version": "54.0.0",
+  "files": {
+    "3ca964bc215a3d815907795f554f09503863bcebb47eb07053ba57613d3ba248": {
+      "displayName": "Application/AgentTrialAgent/CodeAsset/ZipAsset",
+      "source": {
+        "path": "asset.3ca964bc215a3d815907795f554f09503863bcebb47eb07053ba57613d3ba248.zip",
+        "packaging": "file"
+      },
+      "destinations": {
+        "180026596905-us-east-1-1050c98e": {
+          "bucketName": "cdk-hnb659fds-assets-180026596905-us-east-1",
+          "objectKey": "3ca964bc215a3d815907795f554f09503863bcebb47eb07053ba57613d3ba248.zip",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::180026596905:role/cdk-hnb659fds-file-publishing-role-180026596905-us-east-1"
+        }
+      }
+    },
+    "8c42782c19f971cb134dab30e7f3506545e4dd090ec1398556ad69779d7c54e4": {
+      "displayName": "AgentCore-ContinuumAI-default Template",
+      "source": {
+        "path": "AgentCore-ContinuumAI-default.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "180026596905-us-east-1-9db79720": {
+          "bucketName": "cdk-hnb659fds-assets-180026596905-us-east-1",
+          "objectKey": "8c42782c19f971cb134dab30e7f3506545e4dd090ec1398556ad69779d7c54e4.json",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::180026596905:role/cdk-hnb659fds-file-publishing-role-180026596905-us-east-1"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}

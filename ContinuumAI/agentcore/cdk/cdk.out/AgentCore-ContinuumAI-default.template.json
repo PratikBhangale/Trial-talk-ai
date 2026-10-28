@@ -1,0 +1,318 @@
+{
+ "Description": "AgentCore stack for ContinuumAI deployed to default (us-east-1)",
+ "Resources": {
+  "ApplicationAgentTrialAgentRuntimeExecutionRoleCF8C82CE": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "bedrock-agentcore.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "AgentCore Runtime execution role",
+    "Tags": [
+     {
+      "Key": "agentcore:created-by",
+      "Value": "agentcore-cli"
+     },
+     {
+      "Key": "agentcore:project-name",
+      "Value": "ContinuumAI"
+     },
+     {
+      "Key": "hackathon",
+      "Value": "true"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/ExecutionRole/Resource"
+   }
+  },
+  "ApplicationAgentTrialAgentRuntimeExecutionRoleDefaultPolicyB33E271C": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "bedrock:CountTokens",
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:bedrock:*:180026596905:inference-profile/*",
+        "arn:aws:bedrock:*::foundation-model/*"
+       ]
+      },
+      {
+       "Action": [
+        "logs:DescribeLogGroups",
+        "xray:PutTelemetryRecords",
+        "xray:PutTraceSegments"
+       ],
+       "Effect": "Allow",
+       "Resource": "*"
+      },
+      {
+       "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:DescribeLogStreams",
+        "logs:FilterLogEvents",
+        "logs:GetLogEvents",
+        "logs:PutLogEvents",
+        "logs:PutResourcePolicy"
+       ],
+       "Effect": "Allow",
+       "Resource": "arn:aws:logs:us-east-1:180026596905:log-group:/aws/bedrock-agentcore/runtimes/*"
+      },
+      {
+       "Action": [
+        "bedrock-agentcore:CreateConfigurationBundle",
+        "bedrock-agentcore:DeleteConfigurationBundle",
+        "bedrock-agentcore:GetConfigurationBundle",
+        "bedrock-agentcore:GetConfigurationBundleVersion",
+        "bedrock-agentcore:ListConfigurationBundleVersions",
+        "bedrock-agentcore:ListConfigurationBundles",
+        "bedrock-agentcore:UpdateConfigurationBundle"
+       ],
+       "Effect": "Allow",
+       "Resource": "arn:aws:bedrock-agentcore:*:*:configuration-bundle/*"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ApplicationAgentTrialAgentRuntimeExecutionRoleDefaultPolicyB33E271C",
+    "Roles": [
+     {
+      "Ref": "ApplicationAgentTrialAgentRuntimeExecutionRoleCF8C82CE"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/ExecutionRole/DefaultPolicy/Resource"
+   }
+  },
+  "ApplicationAgentTrialAgentRuntimeAdditionalCustomPolicy0DD031794": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "rds-data:BeginTransaction",
+        "rds-data:CommitTransaction",
+        "rds-data:ExecuteStatement",
+        "rds-data:RollbackTransaction"
+       ],
+       "Effect": "Allow",
+       "Resource": "arn:aws:rds:us-east-1:180026596905:cluster:trialtalk",
+       "Sid": "AuroraDataApi"
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:us-east-1:180026596905:secret:trialtalk/db/tt_agent-fKlPne",
+       "Sid": "AgentDbLogin"
+      },
+      {
+       "Action": [
+        "bedrock-agentcore:CreateEvent",
+        "bedrock-agentcore:DeleteEvent",
+        "bedrock-agentcore:GetEvent",
+        "bedrock-agentcore:ListEvents",
+        "bedrock-agentcore:ListSessions",
+        "bedrock-agentcore:RetrieveMemoryRecords"
+       ],
+       "Effect": "Allow",
+       "Resource": "arn:aws:bedrock-agentcore:us-east-1:180026596905:memory/trial_agent_memory-LfUMHsApOY",
+       "Sid": "AgentMemory"
+      },
+      {
+       "Action": "bedrock:Retrieve",
+       "Effect": "Allow",
+       "Resource": "arn:aws:bedrock:us-east-1:180026596905:knowledge-base/4RKI2MFBQR",
+       "Sid": "KnowledgeBaseRetrieve"
+      },
+      {
+       "Action": "ses:SendEmail",
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:ses:us-east-1:180026596905:configuration-set/*",
+        "arn:aws:ses:us-east-1:180026596905:identity/*"
+       ],
+       "Sid": "SesSend"
+      },
+      {
+       "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6*",
+        "arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-4-6*",
+        "arn:aws:bedrock:us-east-1:180026596905:inference-profile/global.anthropic.claude-sonnet-4-6"
+       ],
+       "Sid": "Claude"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ApplicationAgentTrialAgentRuntimeAdditionalCustomPolicy0DD031794",
+    "Roles": [
+     {
+      "Ref": "ApplicationAgentTrialAgentRuntimeExecutionRoleCF8C82CE"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/AdditionalCustomPolicy0/Resource"
+   }
+  },
+  "ApplicationAgentTrialAgentRuntime71C89C84": {
+   "Type": "AWS::BedrockAgentCore::Runtime",
+   "Properties": {
+    "AgentRuntimeArtifact": {
+     "CodeConfiguration": {
+      "Code": {
+       "S3": {
+        "Bucket": "cdk-hnb659fds-assets-180026596905-us-east-1",
+        "Prefix": "3ca964bc215a3d815907795f554f09503863bcebb47eb07053ba57613d3ba248.zip"
+       }
+      },
+      "EntryPoint": [
+       "opentelemetry-instrument",
+       "app.py"
+      ],
+      "Runtime": "PYTHON_3_12"
+     }
+    },
+    "AgentRuntimeName": "ContinuumAI_trial_agent",
+    "Description": "AgentCore Runtime: ContinuumAI_trial_agent",
+    "EnvironmentVariables": {
+     "MEMORY_ID": "trial_agent_memory-LfUMHsApOY",
+     "KNOWLEDGE_BASE_ID": "4RKI2MFBQR",
+     "DB_CLUSTER_ARN": "arn:aws:rds:us-east-1:180026596905:cluster:trialtalk",
+     "DB_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:180026596905:secret:trialtalk/db/tt_agent-fKlPne",
+     "DB_NAME": "trialtalk"
+    },
+    "NetworkConfiguration": {
+     "NetworkMode": "PUBLIC"
+    },
+    "RoleArn": {
+     "Fn::GetAtt": [
+      "ApplicationAgentTrialAgentRuntimeExecutionRoleCF8C82CE",
+      "Arn"
+     ]
+    },
+    "Tags": {
+     "agentcore:created-by": "agentcore-cli",
+     "agentcore:project-name": "ContinuumAI",
+     "hackathon": "true"
+    }
+   },
+   "DependsOn": [
+    "ApplicationAgentTrialAgentRuntimeExecutionRoleDefaultPolicyB33E271C",
+    "ApplicationAgentTrialAgentRuntimeExecutionRoleCF8C82CE"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/Resource"
+   }
+  },
+  "CDKMetadata": {
+   "Type": "AWS::CDK::Metadata",
+   "Properties": {
+    "Analytics": "v2:deflate64:H4sIAAAAAAAA/82TQWsCMRCFf4s5SjbVtfTgTXvqqaXrTUTiZLRxd5NlZ1KRsP+9RK22eGgRCj0Fvpc3eTNJcpU/DNWgp3eUgSmzyq5ULFhDKfWOlpFGS02ETGqSFkkjNQ1QIk814Vz0xUJaXav46iucR6GJQo1muhfjKJrWOrCNriYAPjgWY9EX8rQnGSbA1rsD7qQwSNDa5guKQhsz8y++srAX43nsFhf4WfxKZdbw9uQq6/CspaA/izcc9m8tt01hIR/XLl2NPPJEz4aZT8pVnWtsTMGasUbH9C3wn2HjISR0eTi/T3zo+dhuJ1doWg+l3qBj8C2qNI/g2NbYycMXKFhvrNsk03PgJnAnnTeotnT3nudqeK8GvS1Zm7VHmzrZPwA4IR+zagMAAA=="
+   },
+   "Metadata": {
+    "aws:cdk:path": "AgentCore-ContinuumAI-default/CDKMetadata/Default"
+   }
+  }
+ },
+ "Outputs": {
+  "ApplicationAgentTrialAgentRuntimeIdOutput68D47A9F": {
+   "Description": "Runtime ID for agent: trial_agent",
+   "Value": {
+    "Fn::GetAtt": [
+     "ApplicationAgentTrialAgentRuntime71C89C84",
+     "AgentRuntimeId"
+    ]
+   },
+   "Export": {
+    "Name": "AgentCore-ContinuumAI-default-trial-agent-RuntimeId"
+   }
+  },
+  "ApplicationAgentTrialAgentRuntimeArnOutputA86D0BC3": {
+   "Description": "Runtime ARN for agent: trial_agent",
+   "Value": {
+    "Fn::GetAtt": [
+     "ApplicationAgentTrialAgentRuntime71C89C84",
+     "AgentRuntimeArn"
+    ]
+   },
+   "Export": {
+    "Name": "AgentCore-ContinuumAI-default-trial-agent-RuntimeArn"
+   }
+  },
+  "ApplicationAgentTrialAgentRoleArnOutput7DA0EB7F": {
+   "Description": "Execution Role ARN for agent: trial_agent",
+   "Value": {
+    "Fn::GetAtt": [
+     "ApplicationAgentTrialAgentRuntimeExecutionRoleCF8C82CE",
+     "Arn"
+    ]
+   },
+   "Export": {
+    "Name": "AgentCore-ContinuumAI-default-trial-agent-RoleArn"
+   }
+  },
+  "StackNameOutput": {
+   "Description": "Name of the CloudFormation Stack",
+   "Value": "AgentCore-ContinuumAI-default"
+  }
+ },
+ "Parameters": {
+  "BootstrapVersion": {
+   "Type": "AWS::SSM::Parameter::Value<String>",
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

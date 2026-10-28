@@ -16,6 +16,13 @@
       "runtimeVersion": "PYTHON_3_12",
       "networkMode": "PUBLIC",
       "protocol": "HTTP",
+      "envVars": [
+        { "name": "DB_CLUSTER_ARN", "value": "arn:aws:rds:us-east-1:180026596905:cluster:trialtalk" },
+        { "name": "DB_NAME", "value": "trialtalk" },
+        { "name": "DB_SECRET_ARN", "value": "arn:aws:secretsmanager:us-east-1:180026596905:secret:trialtalk/db/tt_agent-fKlPne" },
+        { "name": "KNOWLEDGE_BASE_ID", "value": "4RKI2MFBQR" },
+        { "name": "MEMORY_ID", "value": "trial_agent_memory-LfUMHsApOY" }
+      ],
       "additionalPolicies": ["runtime-policy.json"]
     }
   ],

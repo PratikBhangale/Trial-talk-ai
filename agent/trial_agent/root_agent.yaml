@@ -3,14 +3,11 @@ model:
   region: us-east-1
 
 tools:
-  - get_participant_profile
   - escalate_to_coordinator
   - search_trial_docs
 
-trial_docs:
-  bucket: trialtalk-kb-docs-180026596905
-  key: trial_docs.md
-  region: us-east-1
+knowledge_base:
+  max_results: 5  # the knowledge base id comes from the KNOWLEDGE_BASE_ID env var
 
 history_max_messages: 30
 

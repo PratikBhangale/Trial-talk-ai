@@ -1,0 +1,396 @@
+{
+  "/AgentCore-ContinuumAI-default": [
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:153:9)",
+        "...node internals..."
+      ]
+    },
+    {
+      "type": "aws:cdk:stack-tags",
+      "data": [
+        {
+          "key": "agentcore:project-name",
+          "value": "ContinuumAI"
+        },
+        {
+          "key": "agentcore:target-name",
+          "value": "default"
+        }
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/StackNameOutput": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "StackNameOutput"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new AgentCoreStack (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\lib\\cdk-stack.js:186:9)",
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:153:9)",
+        "...node internals..."
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/BootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "BootstrapVersion"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/CheckBootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CheckBootstrapVersion"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/CDKMetadata/Default": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CDKMetadata"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...App.synth in aws-cdk-lib...",
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:168:9)",
+        "...node internals..."
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/RuntimeIdOutput": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApplicationAgentTrialAgentRuntimeIdOutput68D47A9F"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new AgentCoreApplication in @aws\\agentcore-cdk...",
+        "new AgentCoreStack (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\lib\\cdk-stack.js:49:28)",
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:153:9)",
+        "...node internals..."
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/RuntimeArnOutput": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApplicationAgentTrialAgentRuntimeArnOutputA86D0BC3"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new AgentCoreApplication in @aws\\agentcore-cdk...",
+        "new AgentCoreStack (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\lib\\cdk-stack.js:49:28)",
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:153:9)",
+        "...node internals..."
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/RoleArnOutput": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApplicationAgentTrialAgentRoleArnOutput7DA0EB7F"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new AgentCoreApplication in @aws\\agentcore-cdk...",
+        "new AgentCoreStack (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\lib\\cdk-stack.js:49:28)",
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:153:9)",
+        "...node internals..."
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/ExecutionRole": [
+    {
+      "type": "aws:cdk:analytics:construct",
+      "data": {
+        "assumedBy": {
+          "principalAccount": "*",
+          "assumeRoleAction": "*"
+        },
+        "description": "*"
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPrincipalPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "attachInlinePolicy": [
+          "*"
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "attachInlinePolicy": [
+          "*"
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPrincipalPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPrincipalPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPrincipalPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addToPrincipalPolicy": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "attachInlinePolicy": [
+          "*"
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "attachInlinePolicy": [
+          "*"
+        ]
+      }
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/AdditionalCustomPolicy0": [
+    {
+      "type": "aws:cdk:analytics:construct",
+      "data": {
+        "document": "*"
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "attachToRole": [
+          "*"
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "attachToRole": [
+          "*"
+        ]
+      }
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApplicationAgentTrialAgentRuntime71C89C84"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new AgentCoreApplication in @aws\\agentcore-cdk...",
+        "new AgentCoreStack (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\lib\\cdk-stack.js:49:28)",
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:153:9)",
+        "...node internals..."
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/CodeAsset/ZipAsset/AssetBucket": [
+    {
+      "type": "aws:cdk:analytics:construct",
+      "data": "*"
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/ExecutionRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApplicationAgentTrialAgentRuntimeExecutionRoleCF8C82CE"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, new AgentCoreApplication in @aws\\agentcore-cdk...",
+        "new AgentCoreStack (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\lib\\cdk-stack.js:49:28)",
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:153:9)",
+        "...node internals..."
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/ExecutionRole/DefaultPolicy": [
+    {
+      "type": "aws:cdk:analytics:construct",
+      "data": "*"
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "attachToRole": [
+          "*"
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "attachToRole": [
+          "*"
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addStatements": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addStatements": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addStatements": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addStatements": [
+          {}
+        ]
+      }
+    },
+    {
+      "type": "aws:cdk:analytics:method",
+      "data": {
+        "addStatements": [
+          {}
+        ]
+      }
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/AdditionalCustomPolicy0/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApplicationAgentTrialAgentRuntimeAdditionalCustomPolicy0DD031794"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, new AgentCoreApplication in @aws\\agentcore-cdk...",
+        "new AgentCoreStack (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\lib\\cdk-stack.js:49:28)",
+        "main (S:\\Projects\\AWS Projects\\Continuum-ai\\ContinuumAI\\agentcore\\cdk\\dist\\bin\\cdk.js:153:9)"
+      ]
+    }
+  ],
+  "/AgentCore-ContinuumAI-default/Application/AgentTrialAgent/Runtime/ExecutionRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApplicationAgentTrialAgentRuntimeExecutionRoleDefaultPolicyB33E271C"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, @aws\\agentcore-cdk...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ]
+}
