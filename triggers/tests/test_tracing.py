@@ -305,3 +305,29 @@ def test_legacy_handler_without_telemetry_module(aws, legacy, monkeypatch):
     assert aws.agent.payloads == [{"participant_id": "P-001", "text": TEXT}]
     assert aws.social.sent[0]["text"]["body"] == "Take it at 8am."
     assert legacy._agent_traces == [] and aws.rds.batches == []
+
+
+@pytest.mark.parametrize("sink_flag", ["0", None])
+def test_router_db_sink_flag(aws, router, monkeypatch, sink_flag):
+    """TELEMETRY_DB_SINK=0 turns off every span write (exporter and agent-span persist) while the reply, the
+    communications row and its token counts are untouched. Unset: the agent's spans are written."""
+    if sink_flag is None:
+        monkeypatch.delenv("TELEMETRY_DB_SINK", raising=False)
+    else:
+        monkeypatch.setenv("TELEMETRY_DB_SINK", sink_flag)
+    if telemetry.AVAILABLE:
+        telemetry.init(force=True)   # init() reads the flag when it builds the exporters
+    aws.rds.respond = router_db
+    aws.agent.respond = agent_contract
+    assert router.handler(sqs_event(), None) == {"ok": True}
+
+    assert aws.social.sent[0]["text"]["body"] == "Take it at 8am."
+    (row,) = outbound_rows(aws.rds)
+    assert (row["body"], row["in_tok"], row["out_tok"]) == ("Take it at 8am.", "120", "45")
+    span_writes = ([b for b in aws.rds.batches if "trial.telemetry_spans" in b["sql"]]
+                   + [s for s, _ in aws.rds.statements if "trial.telemetry_spans" in s])
+    if sink_flag == "0":
+        assert span_writes == []
+    else:
+        assert span_writes
+        assert {r["span_id"] for r in aws.rds.span_rows() if r["service"] == "trial-agent"} == {"a" * 16, "b" * 16}
