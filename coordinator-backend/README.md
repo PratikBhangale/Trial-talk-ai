@@ -95,7 +95,7 @@ There is no admin group, portal or API. Any coordinator or PI can manage account
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/staff/accounts?q=` | Staff accounts with role, sites, studies, enabled, Cognito status |
-| POST | `/staff/accounts` | Invite: `email`, `role` (`coordinator` / `PI`), `site_ids`, `study_ids`, `name`. Cognito emails a temporary password; MFA setup is required at first sign-in |
+| POST | `/staff/accounts` | Invite: `email`, `site_ids`, `study_ids`, `name`. Every invite joins the `PI` group (a `role` in the body is ignored; PATCH can change it), so only a PI can invite. Cognito emails a temporary password; MFA setup is required at first sign-in |
 | GET / PATCH | `/staff/accounts/{username}` | Read, or change `role`, `site_ids`, `study_ids`, `name`. Takes effect at the user's next token refresh |
 | POST | `/staff/accounts/{username}/disable` | Block sign-in and sign out everywhere (optional `reason`). Issued ID tokens last until expiry, at most 60 minutes |
 | POST | `/staff/accounts/{username}/enable` | Re-enable |

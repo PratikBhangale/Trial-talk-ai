@@ -42,19 +42,22 @@ def test_needs_a_staff_token(pool):
                                                   "custom:site_ids": "RIVERSIDE"})[0] == 403
 
 
-def test_staff_invite_and_edit_within_their_own_access(pool):
+def test_every_invite_is_a_pi_and_edits_stay_within_their_own_access(pool):
     status, out = call("POST", "/staff/accounts", {"email": "Pat@Example.org", "name": "Pat", "role": "coordinator",
-                                                   "site_ids": ["riverside", "LAKESIDE"], "study_ids": "KOA-301"})
+                                                   "site_ids": ["riverside", "LAKESIDE"], "study_ids": "KOA-301"},
+                       claims=PI)
     assert status == 201, out
     user = out["user"]
-    assert (user["email"], user["role"], user["site_ids"]) == ("pat@example.org", "coordinator", ["LAKESIDE", "RIVERSIDE"])
-    assert call("POST", "/staff/accounts", {"email": "pat@example.org", "role": "coordinator",
-                                            "site_ids": ["RIVERSIDE"]})[0] == 409
+    assert (user["email"], user["role"], user["site_ids"]) == ("pat@example.org", "PI", ["LAKESIDE", "RIVERSIDE"])
+    assert pool.groups["pat@example.org"] == {"PI"}  # the requested role is ignored
+    assert call("POST", "/staff/accounts", {"email": "pat@example.org", "site_ids": ["RIVERSIDE"]}, claims=PI)[0] == 409
+    assert call("POST", "/staff/accounts", {"email": "x@example.org", "site_ids": ["RIVERSIDE"]})[0] == 403  # coordinators can't grant PI
 
+    status, out = call("PATCH", "/staff/accounts/pat@example.org", {"role": "coordinator", "site_ids": "RIVERSIDE"},
+                       claims=PI)
+    assert status == 200 and out["user"]["role"] == "coordinator" and out["user"]["site_ids"] == ["RIVERSIDE"]
+    assert pool.groups["pat@example.org"] == {"coordinator"}  # moved, not added
     assert call("PATCH", "/staff/accounts/pat@example.org", {"role": "PI"})[0] == 403  # coordinators can't grant PI
-    status, out = call("PATCH", "/staff/accounts/pat@example.org", {"role": "PI", "site_ids": "RIVERSIDE"}, claims=PI)
-    assert status == 200 and out["user"]["role"] == "PI" and out["user"]["site_ids"] == ["RIVERSIDE"]
-    assert pool.groups["pat@example.org"] == {"PI"}  # moved, not added
 
     emails = [u["email"] for u in call("GET", "/staff/accounts")[1]["accounts"]]
     assert emails == ["lead@example.org", "pat@example.org", "pi@example.org"]
@@ -68,12 +71,12 @@ def test_nobody_changes_their_own_access(pool):
 
 
 def test_only_your_own_sites_studies_and_role_can_be_granted(pool):
-    invite = {"email": "x@example.org", "role": "coordinator"}
-    assert call("POST", "/staff/accounts", {**invite, "site_ids": ["LAKEVIEW"]})[0] == 403
-    assert call("POST", "/staff/accounts", {**invite, "site_ids": ["RIVERSIDE", "LAKEVIEW"]})[0] == 403
-    assert call("POST", "/staff/accounts", {**invite, "role": "PI", "site_ids": ["RIVERSIDE"]})[0] == 403
+    invite = {"email": "x@example.org"}
+    assert call("POST", "/staff/accounts", {**invite, "site_ids": ["LAKEVIEW"]}, claims=PI)[0] == 403
+    assert call("POST", "/staff/accounts", {**invite, "site_ids": ["RIVERSIDE", "LAKEVIEW"]}, claims=PI)[0] == 403
+    assert call("POST", "/staff/accounts", {**invite, "site_ids": ["RIVERSIDE"]})[0] == 403  # an invite is a PI
 
-    scoped = {**ME, "custom:study_ids": "KOA-301"}
+    scoped = {**PI, "custom:study_ids": "KOA-301"}
     assert call("POST", "/staff/accounts", {**invite, "site_ids": ["RIVERSIDE"], "study_ids": ["OTHER"]},
                 claims=scoped)[0] == 403
     assert call("POST", "/staff/accounts", {**invite, "site_ids": ["RIVERSIDE"]}, claims=scoped)[0] == 403  # = any
@@ -99,24 +102,23 @@ def test_coordinators_cannot_change_a_pi_account(pool):
 
 
 def test_validation(pool):
-    assert call("POST", "/staff/accounts", {"email": "x@example.org", "role": "coordinator"})[0] == 400  # no site
-    assert call("POST", "/staff/accounts", {"email": "x@example.org", "site_ids": ["RIVERSIDE"]})[0] == 400  # no role
-    assert call("POST", "/staff/accounts", {"email": "x@example.org", "role": "admin", "site_ids": ["RIVERSIDE"]})[0] == 400
-    assert call("POST", "/staff/accounts", {"email": "x@example.org", "role": "PI", "site_ids": ["bad site!"]})[0] == 400
-    call("POST", "/staff/accounts", {"email": "y@example.org", "role": "coordinator", "site_ids": ["RIVERSIDE"]})
-    assert call("PATCH", "/staff/accounts/y@example.org", {"role": None})[0] == 400  # would leave no access
-    assert call("PATCH", "/staff/accounts/y@example.org", {"site_ids": []})[0] == 400
-    assert call("PATCH", "/staff/accounts/y@example.org", {"password": "x"})[0] == 400
+    assert call("POST", "/staff/accounts", {"email": "x@example.org"}, claims=PI)[0] == 400  # no site
+    assert call("POST", "/staff/accounts", {"email": "x@example.org", "site_ids": ["bad site!"]}, claims=PI)[0] == 400
+    call("POST", "/staff/accounts", {"email": "y@example.org", "site_ids": ["RIVERSIDE"]}, claims=PI)
+    assert call("PATCH", "/staff/accounts/y@example.org", {"role": None}, claims=PI)[0] == 400  # would leave no access
+    assert call("PATCH", "/staff/accounts/y@example.org", {"role": "admin"}, claims=PI)[0] == 400
+    assert call("PATCH", "/staff/accounts/y@example.org", {"site_ids": []}, claims=PI)[0] == 400
+    assert call("PATCH", "/staff/accounts/y@example.org", {"password": "x"}, claims=PI)[0] == 400
 
 
 def test_disable_enable_reset(pool):
-    call("POST", "/staff/accounts", {"email": "y@example.org", "role": "coordinator", "site_ids": ["RIVERSIDE"]})
-    status, out = call("POST", "/staff/accounts/y@example.org/disable", {"reason": "left the site"})
+    call("POST", "/staff/accounts", {"email": "y@example.org", "site_ids": ["RIVERSIDE"]}, claims=PI)
+    status, out = call("POST", "/staff/accounts/y@example.org/disable", {"reason": "left the site"}, claims=PI)
     assert status == 200 and out["user"]["enabled"] is False
     assert pool.signed_out == ["y@example.org"]
-    assert call("POST", "/staff/accounts/y@example.org/enable")[1]["user"]["enabled"] is True
-    assert call("POST", "/staff/accounts/y@example.org/reset-password")[1]["user"]["status"] == "RESET_REQUIRED"
-    assert call("GET", "/staff/accounts/nobody@example.org")[0] == 404
+    assert call("POST", "/staff/accounts/y@example.org/enable", claims=PI)[1]["user"]["enabled"] is True
+    assert call("POST", "/staff/accounts/y@example.org/reset-password", claims=PI)[1]["user"]["status"] == "RESET_REQUIRED"
+    assert call("GET", "/staff/accounts/nobody@example.org", claims=PI)[0] == 404
 
 
 def test_cannot_lock_yourself_out(pool):
@@ -125,6 +127,6 @@ def test_cannot_lock_yourself_out(pool):
 
 def test_encoded_usernames_in_the_path(pool):
     """The portal sends encodeURIComponent(email); API Gateway's rawPath keeps the %40."""
-    call("POST", "/staff/accounts", {"email": "y@example.org", "role": "coordinator", "site_ids": ["RIVERSIDE"]})
+    call("POST", "/staff/accounts", {"email": "y@example.org", "site_ids": ["RIVERSIDE"]}, claims=PI)
     assert call("GET", "/staff/accounts/y%40example.org")[1]["user"]["email"] == "y@example.org"
     assert call("PATCH", "/staff/accounts/lead%40example.org", {"site_ids": ["LAKEVIEW"]})[0] == 409

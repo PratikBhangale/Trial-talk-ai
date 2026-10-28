@@ -729,7 +729,8 @@ function openTeamForm(user) {
   $('#teamSave').textContent = user ? 'Save access' : 'Send invite';
   f.email.disabled = !!user;
   if (user) { f.email.value = user.email; f.name.value = user.name || ''; f.role.value = user.role; f.site_ids.value = user.site_ids.join(','); f.study_ids.value = user.study_ids.join(','); }
-  else f.reset();
+  else { f.reset(); f.role.value = 'PI'; }   // the API makes every invite a PI; editing can change the role
+  f.role.disabled = !user;
   (user ? f.name : f.email).focus();
 }
 
