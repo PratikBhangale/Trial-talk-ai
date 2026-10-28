@@ -3,6 +3,9 @@
 Compares active trial.reminders rows with the rem-<reminder_id> schedules and repairs drift:
 creates schedules missing for active rows, deletes schedules whose row is no longer active.
 DRY_RUN=1 (default) only reports. Input {"dry_run": false} overrides for one run.
+
+Second duty: retention for trial.telemetry_spans. Spans older than TELEMETRY_RETENTION_DAYS (default 30, 0 disables)
+are deleted; under DRY_RUN they are only counted. A prune failure is logged and never fails the reconcile run.
 """
 import json
 import os
@@ -59,9 +62,36 @@ def reconcile(event):
         deleted.append(rid)
 
     result = {"dry_run": dry, "active_rows": len(rows), "schedules": len(existing),
-              "created": created, "deleted": deleted, "skipped": skipped}
+              "created": created, "deleted": deleted, "skipped": skipped, "pruned": prune_spans(dry)}
     print(json.dumps(result))
     return result
+
+
+def prune_spans(dry):
+    """Delete (or, when dry, count) telemetry spans past retention. Returns the count, or None if skipped or failed."""
+    try:
+        try:
+            days = int(os.environ.get("TELEMETRY_RETENTION_DAYS", "30"))
+        except ValueError:
+            print(f"prune: bad TELEMETRY_RETENTION_DAYS={os.environ['TELEMETRY_RETENTION_DAYS']!r}, using 30")
+            days = 30
+        if days <= 0:
+            return None
+        with telemetry.span("reconcile.prune", **{"trialtalk.retention_days": days}) as span:
+            cutoff = "start_ts < now() - make_interval(days => :d::int)"
+            if dry:
+                sql = f"SELECT count(*)::int AS n FROM trial.telemetry_spans WHERE {cutoff}"
+            else:
+                sql = (f"WITH gone AS (DELETE FROM trial.telemetry_spans WHERE {cutoff} RETURNING 1) "
+                       "SELECT count(*)::int AS n FROM gone")
+            with Tx() as tx:
+                row = tx.one(sql, d=days)
+            pruned = int((row or {}).get("n") or 0)
+            span.set_attribute("trialtalk.pruned", pruned)
+            return pruned
+    except Exception as e:  # never let retention break the reconcile run
+        print(f"prune failed: {type(e).__name__}: {e}")
+        return None
 
 
 def schedule_spec(r):
