@@ -2,160 +2,395 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TrialTalk Participant Site</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>try{var t=localStorage.getItem("tt.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;if(localStorage.getItem("tt.nav.collapsed")==="1")document.documentElement.classList.add("nav-collapsed")}catch(e){}</script>
+<title>My study · TrialTalk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&display=swap">
 <link rel="stylesheet" href="/ui/common.css">
 </head>
-<body>
-<header></header>
-<main>
-  <div class="panel signed-out" data-signed-out>Sign in as a participant. In production this is a one-time code sent on WhatsApp.</div>
+<body class="site-participant">
+<a class="skip-link" href="#main">Skip to content</a>
 
-  <div class="hidden" data-signed-in>
-    <div class="panel" id="sosPanel">
-      <button class="sos-btn" id="sosBtn">I NEED HELP NOW</button>
-      <div class="muted" style="margin-top:6px;text-align:center">One press alerts your study team right away. Always call 911 (or your local emergency number) if you are in danger.</div>
-      <div class="sos-status hidden" id="sosStatus" role="status" aria-live="assertive"></div>
-    </div>
-  </div>
+<div class="app">
+  <aside class="sidebar">
+    <nav class="nav" aria-label="My study">
+      <a href="#/home" data-route="home" data-ico="home"><span data-icon="home"></span><span class="nl">Home</span></a>
+      <a href="#/medication" data-route="medication" data-ico="pill"><span data-icon="pill"></span><span class="nl">Medication</span></a>
+      <a href="#/chat" data-route="chat" data-ico="message"><span data-icon="message"></span><span class="nl">Chat</span></a>
+      <a href="#/requests" data-route="requests" data-ico="envelope"><span data-icon="envelope"></span><span class="nl">Requests</span><span class="count notify hidden" id="navReplies"></span></a>
+      <a href="#/details" data-route="details" data-ico="user"><span data-icon="user"></span><span class="nl">My details</span></a>
+      <a href="#/history" data-route="history" data-ico="file"><span data-icon="file"></span><span class="nl">History</span></a>
+    </nav>
+  </aside>
 
-  <div class="grid2 hidden" data-signed-in>
-    <div>
-      <div class="panel">
-        <h2>My medication schedule</h2>
-        <div id="pDoses" class="muted">Loading...</div>
-        <h2 style="margin-top:12px">Other reminders</h2>
-        <div id="pOther" class="muted">None</div>
+  <div class="content">
+    <header class="app-header" id="appHeader"></header>
+    <main id="main" tabindex="-1">
+      <div class="panel" data-signed-out>
+        <div class="empty"><span data-icon="user"></span><b>Sign in to your study page</b>
+          <p>Choose a participant from the account menu at the top right. In production you sign in with a one-time code sent on WhatsApp.</p></div>
       </div>
-      <div class="panel">
-        <h2>My details</h2>
-        <form class="form" id="pProfile"></form>
+
+      <div class="hidden" data-signed-in>
+        <!-- ============================================================ home: the most recent of everything, each linking to its page -->
+        <section data-page="home" class="overview" aria-labelledby="h-home">
+          <div class="page-head">
+            <div>
+              <h1 id="h-home" tabindex="-1">Hello</h1>
+              <div class="meta" id="pStudy"></div>
+            </div>
+          </div>
+
+          <section class="report" aria-labelledby="reportTitle">
+            <div class="report-row">
+              <div class="report-copy">
+                <h2 id="reportTitle">Something wrong?</h2>
+                <p>Report a new or worse symptom, side effect or injury. Your study team is told right away.</p>
+                <p class="report-911">If you are in danger, call 911.</p>
+              </div>
+              <button class="report-btn" id="reportBtn" type="button"><span data-icon="first-aid"></span>I need to report an adverse event</button>
+            </div>
+            <div class="report-status" id="reportStatus" role="status" aria-live="polite"></div>
+          </section>
+
+          <div class="kpis section-gap">
+            <a class="kpi" href="#/medication"><span>Next reminder</span><b id="kNext">–</b><small id="kNextSub"></small></a>
+            <a class="kpi" href="#/requests" id="kRepliesTile"><span>Replies from your team</span><b id="kReplies">–</b><small id="kRepliesSub"></small></a>
+            <a class="kpi" href="#/chat"><span>Chat</span><b id="kChat">–</b><small id="kChatSub"></small></a>
+            <a class="kpi" href="#/history"><span>History</span><b id="kHist">–</b><small>Visits, doses and reports</small></a>
+          </div>
+
+          <div class="cols-2 even">
+            <div class="panel">
+              <div class="panel-head"><h2>Upcoming reminders</h2><div class="actions"><a href="#/medication">All medication</a></div></div>
+              <div id="pUpcoming"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Latest from your study team</h2><div class="actions"><a href="#/requests">All requests</a></div></div>
+              <div id="pLatest"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ medication -->
+        <section data-page="medication" hidden aria-labelledby="h-medication">
+          <div class="page-head"><div><h1 id="h-medication" tabindex="-1">Medication</h1><p>Your dosing schedule, set by your study team.</p></div></div>
+          <div class="panel">
+            <div class="panel-head"><h2>Doses</h2></div>
+            <div id="pDoses"></div>
+            <h3 class="sub">Other reminders</h3>
+            <div id="pOther"></div>
+          </div>
+        </section>
+
+        <!-- ============================================================ chat -->
+        <section data-page="chat" hidden aria-labelledby="h-chat">
+          <div class="page-head"><div><h1 id="h-chat" tabindex="-1">Chat</h1><p>Ask about your doses, visits or how you feel.</p></div></div>
+          <div class="chat-window">
+            <div class="chat-top">
+              <span class="avatar" aria-hidden="true">TT</span>
+              <div><b>TrialTalk assistant</b><span>Answers questions about your study. Emergency words alert your team.</span></div>
+            </div>
+            <div class="chat" id="chatLog" role="log" aria-label="Conversation" tabindex="0"></div>
+            <form class="composer" id="chatForm">
+              <div class="chat-suggest" aria-label="Suggestions">
+                <button type="button" class="chip-btn" data-say="When is my next dose?">When is my next dose?</button>
+                <button type="button" class="chip-btn" data-say="I have chest pain and can't breathe">Test: emergency (English)</button>
+                <button type="button" class="chip-btn" data-say="tengo dolor de pecho">Test: emergency (Spanish)</button>
+              </div>
+              <div class="composer-row">
+                <label class="sr-only" for="chatText">Message</label>
+                <input id="chatText" placeholder="Write a message" autocomplete="off" maxlength="1000">
+                <button class="primary" aria-label="Send message"><span data-icon="send"></span>Send</button>
+              </div>
+            </form>
+          </div>
+          <p class="disclose"><span data-icon="first-aid"></span><span>TrialTalk checks each message for emergency words, like “chest pain”.
+            If it finds one, your study team is alerted right away, and you can tell them if it was a mistake.</span></p>
+        </section>
+
+        <!-- ============================================================ requests -->
+        <section data-page="requests" hidden aria-labelledby="h-requests">
+          <div class="page-head"><div><h1 id="h-requests" tabindex="-1">Requests</h1><p>Ask your study team for a change. Their reply appears here.</p></div></div>
+          <div class="cols-2">
+            <div class="panel">
+              <div class="panel-head"><h2>New request</h2></div>
+              <form class="form one" id="pReqForm">
+                <label>What do you need?<select name="kind">
+                  <option value="reminder_change">Change a reminder time</option>
+                  <option value="reminder_pause">Pause my reminders</option>
+                  <option value="profile_change">Change my name, birth date or phone</option>
+                  <option value="contact_team">Talk to my team</option>
+                  <option value="history_correction">Correct my history</option>
+                  <option value="whatsapp_opt_out">Stop WhatsApp messages</option>
+                  <option value="withdrawal">Leave the study</option>
+                </select></label>
+                <label>Message<textarea name="message" rows="4" placeholder="e.g. Could my evening reminder be at 9 PM instead?"></textarea></label>
+                <div class="actions"><button class="primary"><span data-icon="send"></span>Send to my team</button></div>
+              </form>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Your requests</h2></div>
+              <div id="pRequests"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ details -->
+        <section data-page="details" hidden aria-labelledby="h-details">
+          <div class="page-head"><div><h1 id="h-details" tabindex="-1">My details</h1><p>Keep your contact details up to date.</p></div></div>
+          <div class="cols-2 details">
+            <div class="panel">
+              <div class="panel-head"><h2>Your study</h2></div>
+              <dl class="facts" id="pFacts"></dl>
+              <p class="note">To change your name, birth date or phone, <a href="#/requests">send a request</a> to your study team.</p>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Contact details</h2></div>
+              <form class="form two" id="pProfile"></form>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ history -->
+        <section data-page="history" hidden aria-labelledby="h-history">
+          <div class="page-head"><div><h1 id="h-history" tabindex="-1">History</h1><p>Your visits, doses and anything you reported. To fix something, send a request.</p></div></div>
+          <div class="panel"><div id="pHistory"></div></div>
+        </section>
       </div>
-      <div class="panel">
-        <h2>Ask the study team</h2>
-        <form class="form" id="pReqForm">
-          <label>Request<select name="kind">
-            <option value="reminder_change">Change a reminder time</option>
-            <option value="reminder_pause">Pause reminders</option>
-            <option value="profile_change">Change name, birth date or phone</option>
-            <option value="contact_team">Contact my team</option>
-            <option value="history_correction">Correct my history</option>
-            <option value="whatsapp_opt_out">Stop WhatsApp messages</option>
-            <option value="withdrawal">Leave the study</option>
-          </select></label>
-          <label class="wide">Message<textarea name="message" rows="2">Could my evening reminder be at 9 PM instead?</textarea></label>
-          <div class="wide"><button class="primary">Send request</button></div>
-        </form>
-        <div id="pRequests" style="margin-top:10px"></div>
-      </div>
-      <div class="panel">
-        <h2>My history</h2>
-        <div class="table-wrap" id="pHistory"></div>
-      </div>
-    </div>
-    <div>
-      <div class="panel">
-        <h2>Chat with TrialTalk <span class="spacer"></span><span class="chip">Emergency keywords skip the model</span></h2>
-        <div class="chat" id="chat"></div>
-        <form class="row" id="chatForm" style="margin-top:8px">
-          <input id="chatText" placeholder="Type a message..." style="flex:1" autocomplete="off">
-          <button class="primary">Send</button>
-        </form>
-        <div class="row" style="margin-top:6px">
-          <span class="muted">Try:</span>
-          <button class="small" data-say="When is my next dose?">Next dose?</button>
-          <button class="small" data-say="I have chest pain and can't breathe">Emergency (en)</button>
-          <button class="small" data-say="tengo dolor de pecho">Emergency (es)</button>
-        </div>
-      </div>
-    </div>
+    </main>
+    <footer class="site-footer" id="appFooter"></footer>
   </div>
-</main>
+</div>
 
 <script src="/ui/common.js"></script>
+<script type="module" src="/ui/orb.js"></script>
 <script>
-const SOS_STEP = { open: 'Your study team has been alerted and has not opened it yet.',
-  acknowledged: 'Your study team has seen your alert and is responding.', resolved: 'Your study team has closed this alert.' };
-let sosTimer;
+const state = { page: 'home', first: '' };
 
-async function showSos(reply) {
+// ------------------------------------------------------------ pages (hash routes, same pattern as the staff portal)
+const PAGES = { home: 'Home', medication: 'Medication', chat: 'Chat', requests: 'Requests', details: 'My details', history: 'History' };
+function route(moveFocus) {
+  const want = (/^#\/(\w+)/.exec(location.hash) || [])[1];
+  const page = PAGES[want] ? want : 'home';
+  state.page = page;
+  $$('[data-page]').forEach(s => { s.hidden = s.dataset.page !== page; });
+  $$('.nav a').forEach(a => {
+    const on = a.dataset.route === page, use = $('use', a);
+    on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
+    if (use) use.setAttribute('href', `#i-${a.dataset.ico}${on ? '-fill' : ''}`);
+  });
+  setCrumbs(page === 'home' ? [['My study', '']] : [['My study', '#/home'], [PAGES[page], '']]);
+  document.title = `${PAGES[page]} · ${state.first ? state.first + "'s study" : 'My study'} · TrialTalk`;
+  if (moveFocus) { $(`#h-${page}`)?.focus(); window.scrollTo(0, 0); }
+  if (page === 'chat') $('#chatLog').scrollTop = 1e9;
+}
+addEventListener('hashchange', () => route(true));
+
+// ------------------------------------------------------------ adverse event report and its status
+// What has happened and what happens next (IF: escalate to a person, with clear next steps), as three steps left to
+// right. Each step says what is true now; the current step says what the participant is waiting for.
+const REPORT = {
+  open: { tone: 'warn', icon: 'clock', title: 'Your study team has your report', note: 'Keep your phone close. They will call you.',
+    steps: [['done', 'Report sent', 'created_at'], ['now', 'Waiting for your team'], ['', 'Your team calls you']] },
+  acknowledged: { tone: 'info', icon: 'check', title: 'Your team has seen your report', note: 'Someone from your study team is calling you.',
+    steps: [['done', 'Report sent', 'created_at'], ['done', 'Seen by your team', 'acknowledged_at'], ['now', 'Your team is calling you']] },
+  resolved: { tone: 'ok', icon: 'check', title: 'Your team closed this report', note: 'If something new happens, report it again.',
+    steps: [['done', 'Report sent', 'created_at'], ['done', 'Seen by your team', 'acknowledged_at'], ['done', 'Closed by your team', 'resolved_at']] },
+};
+let reportTimer;
+// A date and time short enough to be a KPI figure: "Oct 28, 8 PM" (minutes only when they are not :00). The non-breaking
+// spaces keep "Oct 28" and "8 PM" whole, so a narrow card breaks only after the comma.
+function figureWhen(iso) {
+  const d = parseTs(iso), date = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(d);
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', ...(d.getMinutes() ? { minute: '2-digit' } : {}) }).format(d);
+  const keep = s => s.replace(/ /g, '\u00a0');
+  return `${keep(date)}, ${keep(time)}`;
+}
+// "Today", "Tomorrow" or the weekday: how a person says when the next dose is.
+function dayWord(iso) {
+  const d = parseTs(iso), start = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), days = Math.round((start(d) - start(new Date())) / 864e5);
+  return days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(d);
+}
+const clock = iso => iso ? new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(parseTs(iso)) : '';
+
+async function showReport(reply) {
   const { alerts } = await api('GET', '/me/emergency', undefined, { quiet: true }).catch(() => ({ alerts: [] }));
-  const a = alerts.find(x => x.status !== 'resolved') || alerts[0];
-  const box = $('#sosStatus');
-  if (!a && !reply) return box.classList.add('hidden');
-  box.classList.remove('hidden');
-  box.innerHTML = (reply ? `<b>${esc(reply)}</b><br>` : '') + (a ? `${esc(SOS_STEP[a.status])}${a.press_count > 1 ? ` (pressed ${a.press_count} times)` : ''}` : '');
-  clearTimeout(sosTimer);
-  if (a && a.status !== 'resolved' && TT.user) sosTimer = setTimeout(() => showSos(null), 4000);
+  const a = alerts.find(x => x.status !== 'resolved') || (reply ? alerts[0] : null);
+  const box = $('#reportStatus');
+  if (!a) { box.innerHTML = reply ? `<p class="report-reply">${esc(reply)}</p>` : ''; box._html = ''; box._alert = null; return; }
+  const r = REPORT[a.status] || REPORT.open;
+  // Steps reached since the last render of this same report animate once (.advanced); a new report just fades in (.fresh).
+  const same = box._alert === a.alert_id, done = r.steps.filter(s => s[0] === 'done').length, prev = same ? box._done : done;
+  const cls = (st, i) => st + (same && done > prev && ((st === 'done' && i >= prev) || st === 'now') ? ' advanced' : '');
+  box._alert = a.alert_id; box._done = done;
+  const html = `<div class="status-card tone-${r.tone}${same ? '' : ' fresh'}">
+      <div class="status-head">${icon(r.icon)}<div><b>${esc(r.title)}</b>
+        <span>${esc(r.note)}${a.press_count > 1 ? ` You reported ${a.press_count} times; your team sees one report.` : ''}</span></div></div>
+      <ol class="stepper">${r.steps.map(([st, label, at], i) => `<li class="${cls(st, i)}"><span class="tl-dot" aria-hidden="true">${st === 'done' ? icon('check', 'sm') : ''}</span>
+        <span class="tl-text"><b>${esc(label)}</b>${at && a[at] ? `<span>${esc(clock(a[at]))}</span>` : ''}</span>
+        <span class="sr-only">${st === 'done' ? 'Done' : st === 'now' ? 'Current step' : 'Next'}</span></li>`).join('')}</ol>
+      ${reply ? `<p class="report-reply">${esc(reply)}</p>` : ''}
+    </div>`;
+  if (box._html !== html) { box.innerHTML = html; box._html = html; }
+  clearTimeout(reportTimer);
+  if (a.status !== 'resolved' && TT.user) reportTimer = setTimeout(() => showReport(null), 4000);
 }
 
-$('#sosBtn').onclick = async () => {
-  const out = await api('POST', '/me/emergency', {});  // a single press is a complete request
-  showSos(out.reply);
+// One press is a complete report. "urgent": the button reports an adverse event, not a life-threatening emergency;
+// emergency words in chat still raise a life-threatening alert, and the page tells people to call 911 if in danger.
+$('#reportBtn').onclick = async () => {
+  const out = await api('POST', '/me/emergency', { severity: 'urgent' });
+  showReport(out.reply);
 };
 
+// ------------------------------------------------------------ sign-in and data
+const PROFILE = [['email', 'Email', 'email'], ['address_line1', 'Address'], ['city', 'City'], ['state', 'State'],
+  ['postal_code', 'Postal code'], ['timezone', 'Time zone']];
+
+function doseCard(d) {
+  return `<article class="dose">
+    <div class="l1">${icon('pill')}<b>${esc(d.label)}</b>${chip(d.status)}</div>
+    ${d.dose?.instructions ? `<p>${esc(d.dose.instructions)}</p>` : ''}
+    <div class="when">${icon('clock', 'sm')}<span>${esc(d.schedule)}${d.next_send_at ? ` · Next reminder ${esc(when(d.next_send_at))}` : ''}</span></div>
+  </article>`;
+}
+
 async function onSignIn(user) {
-  clearTimeout(sosTimer);
-  if (!user) return;
-  showSos(null);
+  clearTimeout(reportTimer);
+  if (!user) { state.first = ''; route(false); return; }
+  $('#pDoses').innerHTML = skeleton(3);
+  showReport(null);
   const [{ participant: p }, rem, hist, reqs, chat] = await Promise.all([
     api('GET', '/me'), api('GET', '/me/reminders'), api('GET', '/me/history'), api('GET', '/me/requests'), api('GET', '/me/chat'),
   ]);
-  $('#pDoses').className = rem.dose_schedule.length ? '' : 'muted';
-  $('#pDoses').innerHTML = rem.dose_schedule.length ? rem.dose_schedule.map(d => `
-    <div class="dose"><b>${esc(d.label)}</b> ${chip(d.status)}
-    <div class="muted">${esc(d.schedule)} · next ${esc(d.next_send_at || '-')}</div></div>`).join('') : 'No dose reminders.';
+  state.first = (p.full_name || '').split(' ')[0];
+  $('#h-home').textContent = `Hello, ${state.first}`;
+  route(false);
+  const site = humanize(String(p.site_id).toLowerCase());
+  $('#pStudy').innerHTML = `${chip(p.status)}<span>Study ${esc(p.study_id)}</span><span>${esc(site)} site</span>`;
+
+  // ---- medication
+  const doses = rem.dose_schedule;
+  $('#pDoses').innerHTML = doses.length ? doses.map(doseCard).join('')
+    : emptyState('pill', 'No medication reminders yet', 'Your study team sets your dosing schedule. It shows up here once they do.');
   const other = rem.reminders.filter(r => r.reminder_type !== 'dose');
-  $('#pOther').className = other.length ? '' : 'muted';
-  $('#pOther').innerHTML = other.length ? other.map(r => `<div>${esc(r.label)}: ${esc(r.schedule)} ${chip(r.status)}</div>`).join('') : 'None';
-  $('#pProfile').innerHTML = `<div class="wide"><b>${esc(p.full_name)}</b> · ${esc(p.participant_id)} · ${esc(p.phone_e164)} ${chip(p.status)}</div>`
-    + ['email', 'address_line1', 'city', 'state', 'postal_code', 'preferred_language', 'timezone'].map(k =>
-      `<label>${esc(k)}<input name="${k}" value="${esc(p[k])}" data-orig="${esc(p[k])}"></label>`).join('')
-    + `<div class="wide"><button class="primary">Save</button> <span class="muted">Name, birth date and phone change by request.</span></div>`;
-  $('#pHistory').innerHTML = table(hist.events, ['record_type', 'occurred_at', 'status', 'response', 'visit_code', 'verbatim_text']);
-  $('#pRequests').innerHTML = reqs.requests.map(r => `<div style="padding:6px 0;border-top:1px solid var(--border)">
-    <div class="muted">${esc(r.created_at)} · ${esc(r.subject)}</div><div>${esc(r.body_text)}</div>
-    ${r.replies.length ? r.replies.map(x => `<div class="dose" style="margin:4px 0 0 12px"><b>Study team</b> <span class="muted">${esc(x.created_at)}</span><div>${esc(x.body_text)}</div></div>`).join('')
-      : '<div class="muted">Waiting for a reply from your study team.</div>'}</div>`).join('');
-  $('#chat').innerHTML = '';
+  $('#pOther').innerHTML = other.length ? other.map(r => `<article class="dose"><div class="l1"><b>${esc(r.label)}</b>${chip(r.status)}</div>
+    <div class="when">${icon('clock', 'sm')}<span>${esc(r.schedule)}</span></div></article>`).join('')
+    : '<p class="muted">No other reminders.</p>';
+
+  // ---- home: the latest of everything, each tile and panel linking to its page
+  const upcoming = [...doses].filter(d => d.next_send_at).sort((x, y) => parseTs(x.next_send_at) - parseTs(y.next_send_at));
+  const next = upcoming[0];
+  // The figure carries day and time; the caption names the dose, so nothing is said twice.
+  $('#kNext').textContent = next ? figureWhen(next.next_send_at) : 'None';
+  $('#kNextSub').textContent = next ? `${next.label} · ${dayWord(next.next_send_at)}` : 'No reminders scheduled';
+  const answered = reqs.requests.filter(r => r.replies.length), waiting = reqs.requests.length - answered.length;
+  $('#kReplies').textContent = answered.length;
+  $('#kRepliesSub').textContent = waiting ? `${waiting} ${waiting === 1 ? 'request' : 'requests'} waiting for a reply` : reqs.requests.length ? 'Every request has a reply' : 'No requests yet';
+  $('#kChat').textContent = chat.messages.length;
+  $('#kChatSub').textContent = chat.messages.length ? `Last message ${when(chat.messages.at(-1).created_at)}` : 'No messages yet';
+  $('#kHist').textContent = hist.events.length;
+  $('#pUpcoming').innerHTML = upcoming.length ? `<ul class="list">${upcoming.slice(0, 3).map(d => `<li>
+      <span class="list-main"><b>${esc(d.label)}</b><span>${esc(d.dose?.instructions || d.schedule)}</span></span>
+      <span class="list-side">${esc(when(d.next_send_at))}</span></li>`).join('')}</ul>`
+    : emptyState('clock', 'Nothing scheduled', 'Your study team adds reminders when your schedule is set.');
+  const replies = reqs.requests.flatMap(r => r.replies.map(x => ({ ...x, about: r.body_text }))).sort((x, y) => parseTs(y.created_at) - parseTs(x.created_at));
+  $('#pLatest').innerHTML = replies.length ? `<ul class="list">${replies.slice(0, 2).map(x => `<li>
+      <span class="list-main"><b>${esc(x.body_text)}</b><span>About: ${esc(x.about)}</span></span>
+      <span class="list-side">${esc(when(x.created_at))}</span></li>`).join('')}</ul>`
+    : emptyState('envelope', 'No replies yet', 'When your team answers a request, the reply shows up here.');
+
+  // ---- details: facts on the left, the editable contact form on the right
+  $('#pFacts').innerHTML = [['Name', p.full_name], ['Participant ID', p.participant_id], ['Phone', p.phone_e164], ['Study', p.study_id],
+    ['Site', site], ['Status', null]].map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${k === 'Status' ? chip(p.status) : esc(v)}</dd></div>`).join('');
+  $('#pProfile').innerHTML = PROFILE.map(([k, l, t]) => `<label>${esc(l)}<input name="${k}" type="${t || 'text'}" value="${esc(p[k])}" data-orig="${esc(p[k])}"></label>`).join('')
+    + `<label>Language<select name="preferred_language" data-orig="${esc(p.preferred_language)}">${[['en', 'English'], ['es', 'Español']].map(([v, l]) =>
+      `<option value="${v}" ${p.preferred_language === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`
+    + `<div class="wide actions"><button class="primary">Save my details</button></div>`;
+
+  // ---- history and requests
+  $('#pHistory').innerHTML = table(hist.events, ['record_type', 'occurred_at', 'status', 'response', 'visit_code', 'verbatim_text'], null,
+    emptyState('file', 'Nothing recorded yet', 'Your visits, doses and anything you report to the team will be listed here.'));
+  setCount('#navReplies', answered.length);
+  $('#pRequests').innerHTML = reqs.requests.length ? reqs.requests.map(r => `<article class="thread">
+      <div class="from">${esc(when(r.created_at))}</div><p>${esc(r.body_text)}</p>
+      ${r.replies.length ? r.replies.map(x => `<div class="team"><div class="from"><b>Study team</b> · ${esc(when(x.created_at))}</div><p>${esc(x.body_text)}</p></div>`).join('')
+        : chip('new', 'Waiting for a reply')}</article>`).join('')
+    : emptyState('envelope', 'No requests yet', 'Send one with the form, and your team’s reply will appear here.');
+
+  // ---- chat
+  $('#chatLog').innerHTML = '';
+  if (!chat.messages.length) bubble(`Hi ${state.first}, I can answer questions about your doses and visits. To report a symptom or side effect, use the orange button on Home.`, 'outbound');
   chat.messages.forEach(m => bubble(m.body_text, m.direction));
 }
 
-function bubble(text, direction, emergency) {
+function setCount(sel, n) {
+  const el = $(sel); if (!el) return;
+  el.className = `count notify${n ? '' : ' hidden'}`; el.textContent = n;
+  el.setAttribute('aria-label', `${n} ${n === 1 ? 'reply' : 'replies'}`);
+}
+
+// ------------------------------------------------------------ chat
+function bubble(text, direction, emergency, fresh) {
   const b = document.createElement('div');
-  b.className = `bubble ${direction === 'inbound' ? 'in' : 'out'}${emergency ? ' emergency' : ''}`;
+  b.className = `bubble ${direction === 'inbound' ? 'in' : 'out'}${emergency ? ' emergency' : ''}${fresh ? ' new' : ''}`;
   b.textContent = text;
-  $('#chat').append(b); $('#chat').scrollTop = 1e9;
+  $('#chatLog').append(b); $('#chatLog').scrollTop = 1e9;
   return b;
 }
 
 async function sendChat(text) {
   if (!text.trim()) return;
-  bubble(text, 'inbound');
-  const wait = bubble('...', 'outbound');
+  bubble(text, 'inbound', false, true);
+  // Thinking indicator: the Libraries.dev orb (ui/orb.js) beside a plain word, so it reads without the animation too.
+  const wait = bubble('', 'outbound', false, true);
+  wait.classList.add('thinking');
+  wait.innerHTML = '<canvas class="orb" aria-hidden="true"></canvas><span>Thinking</span>';
+  wait.setAttribute('aria-label', 'TrialTalk is replying');
+  const stopOrb = window.mountOrb ? window.mountOrb($('canvas', wait)) : () => {};
   try {
     const out = await api('POST', '/me/chat', { text });
-    wait.remove(); bubble(out.reply, 'outbound', out.emergency);
-    if (out.emergency) toast('Emergency path: fixed reply, team emailed (see Inspector > SES emails)');
-  } catch (e) { wait.textContent = 'Error: ' + e.message; }
+    stopOrb(); wait.remove(); bubble(out.reply, 'outbound', out.emergency, true);
+    if (out.emergency) {
+      // The detection is a tentative signal: say what happened and let the person correct it.
+      $('#chatLog').insertAdjacentHTML('beforeend', `<div class="bubble-actions">
+        <a class="btn small" href="tel:911">${icon('phone', 'sm')}Call 911</a>
+        <button type="button" class="small" data-mistake>Not an emergency? Tell your team</button></div>`);
+      $('#chatLog').scrollTop = 1e9;
+      showReport(null);
+    }
+  } catch (e) { stopOrb(); wait.classList.remove('thinking'); wait.textContent = 'Unable to send. Check your connection and try again.'; wait.classList.add('emergency'); }
 }
 
-document.addEventListener('click', e => { const say = e.target.closest('[data-say]'); if (say) sendChat(say.dataset.say); });
+document.addEventListener('click', async e => {
+  const say = e.target.closest('[data-say]'); if (say) sendChat(say.dataset.say);
+  const oops = e.target.closest('[data-mistake]');
+  if (oops) {
+    oops.disabled = true;
+    await api('POST', '/me/requests', { kind: 'contact_team', message: 'My last chat message was flagged as an emergency, but it was not one.' });
+    oops.closest('.bubble-actions').innerHTML = `<span class="pill tone-ok">${icon('check', 'sm')}Your team knows it was not an emergency</span>`;
+  }
+});
 $('#pProfile').onsubmit = async e => {
   e.preventDefault();
   const changes = {};
   for (const el of e.target.elements) if (el.name && el.value !== el.dataset.orig) changes[el.name] = el.value || null;
-  if (!Object.keys(changes).length) return toast('Nothing changed');
-  await api('PATCH', '/me', changes); toast('Saved'); onSignIn(TT.user);
+  if (!Object.keys(changes).length) return toast('No changes to save');
+  await api('PATCH', '/me', changes); toast('Your details are saved'); onSignIn(TT.user);
 };
 $('#pReqForm').onsubmit = async e => {
   e.preventDefault();
   await api('POST', '/me/requests', formData(e.target));
-  toast('Sent to your study team'); onSignIn(TT.user);
+  e.target.message.value = '';
+  toast('Sent to your study team. Their reply will appear here.'); onSignIn(TT.user);
 };
 $('#chatForm').onsubmit = e => { e.preventDefault(); const t = $('#chatText').value; $('#chatText').value = ''; sendChat(t); };
 
-initPortal('participant', 'for study participants', onSignIn);
+route(false);
+initPortal('participant', onSignIn).then(() => route(false));
 </script>
 </body>
 </html>

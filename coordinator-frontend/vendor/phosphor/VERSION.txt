@@ -1,0 +1,1 @@
+@phosphor-icons/core 2.1.1 (MIT). Path data inlined in ui/common.js ICON_PATHS; regenerate from package/assets/{regular,fill}.

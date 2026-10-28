@@ -6,7 +6,6 @@ Starts a throwaway PostgreSQL built from db/ (plus tests/pending_db_additions.sq
 same synthetic data as the deployed database, adds synthetic staff, and serves:
 
     /staff, /participant            one page per portal (ui/*.html), as they will be deployed separately
-    /inspector                      dev only: what would have gone to AWS
     /api/staff/...  -> staff_api.handler        signed in as a staff-pool user (coordinator / PI); this includes
                                                 emergency alerts, staff accounts and the OpenTelemetry widget
     /api/me...      -> participant_api.handler  signed in as a participant-pool user
@@ -47,8 +46,8 @@ import staff_api.accounts as accounts  # noqa: E402
 import staff_api.handler as staff  # noqa: E402
 
 PAGES = {"/": "index.html", "/staff": "staff.html", "/participant": "participant.html",
-         "/inspector": "inspector.html", "/ui/common.css": "common.css", "/ui/common.js": "common.js",
-         "/ui/widgets.js": "widgets.js"}
+         "/ui/common.css": "common.css", "/ui/common.js": "common.js",
+         "/ui/widgets.js": "widgets.js", "/ui/orb.js": "orb.js"}
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8"}
 
@@ -265,6 +264,14 @@ class Handler(BaseHTTPRequestHandler):
             if path in PAGES and self.command == "GET":
                 f = UI / PAGES[path]
                 return self._send(200, f.read_bytes(), TYPES[f.suffix])
+            # Vendored browser libraries (coordinator-frontend/vendor/<lib>/...). Resolved and checked so ".." cannot
+            # leave the folder.
+            if path.startswith("/ui/vendor/") and self.command == "GET":
+                vendor = (UI / "vendor").resolve()
+                f = (UI / path[len("/ui/"):]).resolve()
+                if f.is_relative_to(vendor) and f.is_file() and f.suffix in TYPES:
+                    return self._send(200, f.read_bytes(), TYPES[f.suffix])
+                return self._send(404, b'{"error": "not found"}', "application/json")
             if path.startswith("/api/"):
                 return self._api(path[4:], query, body)
             if path.startswith("/dev/"):
@@ -349,8 +356,7 @@ def main():
         seed()
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
         base = f"http://127.0.0.1:{args.port}"
-        print(f"TrialTalk portals (Ctrl+C to stop):\n  staff        {base}/staff\n  participant  {base}/participant\n"
-              f"  inspector    {base}/inspector  (dev only)")
+        print(f"TrialTalk portals (Ctrl+C to stop):\n  staff        {base}/staff\n  participant  {base}/participant")
         server.daemon_threads = True
         server.serve_forever()
     except KeyboardInterrupt:

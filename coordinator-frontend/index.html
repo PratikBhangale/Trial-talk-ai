@@ -2,32 +2,39 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TrialTalk Test Portals</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>try{var t=localStorage.getItem("tt.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
+<title>TrialTalk · Local portals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&display=swap">
 <link rel="stylesheet" href="/ui/common.css">
 </head>
 <body>
-<header>
-  <div class="brand"><span class="portal-name">TrialTalk</span><small>local test portals · synthetic data only</small></div>
-</header>
-<main>
-  <div class="cards">
-    <a class="panel" href="/staff">
-      <h2>Staff portal</h2>
-      <p>Coordinators and PIs: emergency alerts, enroll and withdraw participants, reminders and dosing, requests, staff accounts, OpenTelemetry.</p>
-      <p class="muted">Production: staff user pool, staff app client, MFA, /staff routes. Scoped by site through RLS.</p>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="app-header" id="appHeader"></header>
+<main id="main" class="site-main" tabindex="-1">
+  <div class="page-head">
+    <div>
+      <h1>Choose a portal</h1>
+      <p>Each portal is its own site, as it will be deployed. Everything here is synthetic and deleted when the dev server stops.</p>
+    </div>
+  </div>
+  <div class="choose">
+    <a class="card-link" href="/staff">
+      <h2><span data-icon="users"></span>Staff portal</h2>
+      <p>For coordinators and PIs: emergency alerts, participants, reminders and dosing, requests, team accounts, token usage and observability.</p>
+      <span class="go">Open the staff portal <span data-icon="arrow" class="sm"></span></span>
     </a>
-    <a class="panel" href="/participant">
-      <h2>Participant site</h2>
-      <p>Participants: one-press emergency button, medication schedule, history, requests to the study team, and chat with the agent.</p>
-      <p class="muted">Production: participant user pool, code on WhatsApp, /me routes. Scoped to the participant through RLS.</p>
-    </a>
-    <a class="panel" href="/inspector">
-      <h2>Inspector (dev only)</h2>
-      <p>What would have gone to AWS: schedules (fire them), WhatsApp, SES, agent calls, both user pools.</p>
-      <p class="muted">Not deployed.</p>
+    <a class="card-link" href="/participant">
+      <h2><span data-icon="message"></span>Participant site</h2>
+      <p>For participants: one-press emergency help, medication schedule, requests to the study team and chat.</p>
+      <span class="go">Open the participant site <span data-icon="arrow" class="sm"></span></span>
     </a>
   </div>
 </main>
+<footer class="site-footer" id="appFooter"></footer>
+<script src="/ui/common.js"></script>
+<script>injectAssets(); renderChrome('home');</script>
 </body>
 </html>

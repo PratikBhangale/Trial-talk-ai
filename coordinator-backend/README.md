@@ -177,7 +177,7 @@ The local database is built from `db/01_schema.sql` and `db/02_roles_rls.sql`, t
 ### Test portals (local, no AWS)
 
 ```bash
-TT_PG_BIN=.pg/Library/bin .pg/python coordinator-backend/devserver/server.py      # then open http://127.0.0.1:8787
+TT_PG_BIN=.pg/Library/bin .pg/python coordinator-backend/devserver/server.py      # then open http://127.0.0.1:8787  (macOS: prefix LC_ALL=en_US.UTF-8)
 ```
 
 The server starts a throwaway Postgres built the same way and seeds synthetic data:
@@ -189,11 +189,14 @@ Participants you enroll get the next free id after the highest one you can see (
 
 Each portal is its own page, as it will be deployed:
 
-- **`/staff`** (coordinators and PIs): widgets across the top, with **Emergency alerts** (refreshes every 4 s, pulses and beeps on a new one, acknowledge / resolve), **Token usage**, **Team** (invite, edit, disable, reset staff accounts) and, at the bottom, **Observability** (requests, error rate, average and slowest latency, counters); then enroll, edit and withdraw participants; create dose, visit or one-time reminders; pause, resume, change the time, send now or cancel; timeline, adherence, communications and the request queue.
-- **`/participant`**: a big **I NEED HELP NOW** button (one press, no confirmation, no input) that shows the instruction and then live alert status; dose schedule, profile, history, requests, and chat. The emergency keyword buttons show the Layer 0 path.
-- **`/inspector`** (dev only, not a portal): what would have gone to AWS, meaning EventBridge schedules (**Fire** runs one the way Scheduler would), the WhatsApp outbox, SES emails, agent calls and both user pools.
+The pages live in [`../coordinator-frontend`](../coordinator-frontend): plain HTML, CSS and JS with no build step (`common.css` / `common.js` shared, `widgets.js` for the staff dashboard widgets, `vendor/` for two small MIT libraries). They only talk to `/api/...` and, for the dev sign-in, `/dev/...`.
 
-Each page has a dev sign-in picker in place of Cognito. The server builds the token claims from fake user pools the way Cognito would, including the real staff pre-token trigger. Sign-in follows those pools:
+- **`/staff`** (coordinators and PIs): one page per task in the sidebar. **Overview** (open alerts, enrollment by site, participants who may need a check-in), **Emergency alerts** (refreshes every 4 s, sounds on a new one, acknowledge / resolve), **Participants** (enroll, edit, withdraw; dose, visit or one-time reminders: pause, resume, change the time, send now, cancel; timeline, adherence, communications), **Requests** (quick or written replies, each with a 5 s undo), **Team** (invite, edit, disable, reset staff accounts), **Token usage** and **Observability** (requests, error rate, latency, counters).
+- **`/participant`**: an orange **I need to report an adverse event** button (one press, no input; sends `severity: "urgent"`) that shows the instruction and then a live status timeline; dose schedule, profile, history, requests, and chat. The emergency keyword buttons show the Layer 0 path.
+
+What would have gone to AWS (schedules, WhatsApp, SES emails, agent calls, both user pools) is still recorded by the fakes and readable at `GET /dev/outbox`; `POST /dev/fire/<reminder_id>` fires a schedule the way Scheduler would.
+
+Each portal's header has an account menu in place of Cognito: pick a coordinator, PI or participant, or load the **Worst case** test data. The server builds the token claims from fake user pools the way Cognito would, including the real staff pre-token trigger. Sign-in follows those pools:
 - Whatever the Team widget changes applies on the next request.
 - Disabled staff and withdrawn participants are refused.
 - Each portal only accepts its own users.

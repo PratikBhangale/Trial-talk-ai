@@ -2,169 +2,466 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TrialTalk Staff Portal</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>try{var t=localStorage.getItem("tt.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;if(localStorage.getItem("tt.nav.collapsed")==="1")document.documentElement.classList.add("nav-collapsed")}catch(e){}</script>
+<title>Overview · TrialTalk Staff</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&display=swap">
 <link rel="stylesheet" href="/ui/common.css">
 </head>
-<body>
-<header></header>
-<main>
-  <div class="panel signed-out" data-signed-out>Sign in as a coordinator or PI to manage participants, triage emergency alerts and manage your team.</div>
+<body class="site-staff">
+<a class="skip-link" href="#main">Skip to content</a>
 
-  <div class="hidden" data-signed-in>
-    <div class="panel alert-panel" id="alertsPanel">
-      <h2>Emergency alerts <span id="alertBadge"></span><span class="spacer"></span>
-        <span class="tabs" id="alertTabs" style="margin:0"><button data-scope="active" class="on">Active</button><button data-scope="resolved">Resolved</button></span></h2>
-      <div id="alertList" class="muted">Loading...</div>
-    </div>
-    <div class="grid2">
-      <div class="panel" id="usagePanel">
-        <h2>Token usage <span class="spacer"></span>
-          <select id="usageDays" aria-label="Period"><option value="1">Today</option><option value="7">7 days</option><option value="30" selected>30 days</option></select></h2>
-        <div id="usageBody" class="muted">Loading...</div>
-      </div>
-      <div class="panel" id="teamPanel">
-        <h2>Team (staff accounts) <span class="spacer"></span><button class="small primary" id="inviteBtn">+ Invite</button></h2>
-        <div id="teamFormWrap" class="hidden" style="margin-bottom:12px">
-          <form class="form" id="teamForm">
-            <label>Email *<input name="email" type="email" required value="newcoordinator@riverside.example.org"></label>
-            <label>Name<input name="name" value="Avery Kim"></label>
-            <label>Role<select name="role"><option>coordinator</option><option>PI</option></select></label>
-            <label>Sites (comma separated)<input name="site_ids" value="RIVERSIDE"></label>
-            <label>Studies (empty = any)<input name="study_ids" value="KOA-301"></label>
-            <div class="wide row"><button class="primary" id="teamSave">Send invite</button><button type="button" id="teamCancel">Cancel</button>
-              <span class="muted">Staff are their own admins. Cognito emails a temporary password; MFA setup is required at first sign-in.</span></div>
-          </form>
-        </div>
-        <div class="table-wrap scroll" id="teamBody" class="muted">Loading...</div>
-      </div>
-    </div>
-  </div>
+<div class="app">
+  <aside class="sidebar">
+    <nav class="nav" aria-label="Staff portal">
+      <div class="group" aria-hidden="true">Today</div>
+      <a href="#/overview" data-route="overview"><span data-icon="overview"></span><span class="nl">Overview</span></a>
+      <div class="group" aria-hidden="true">Care</div>
+      <a href="#/alerts" data-route="alerts"><span data-icon="alert"></span><span class="nl">Emergency alerts</span><span class="count hidden" id="navAlerts"></span></a>
+      <a href="#/participants" data-route="participants"><span data-icon="users"></span><span class="nl">Participants</span><span class="count hidden" id="navParticipants"></span></a>
+      <a href="#/requests" data-route="requests"><span data-icon="inbox"></span><span class="nl">Requests</span><span class="count hidden" id="navRequests"></span></a>
+      <div class="group" aria-hidden="true">Operations</div>
+      <a href="#/team" data-route="team"><span data-icon="team"></span><span class="nl">Team</span></a>
+      <a href="#/usage" data-route="usage"><span data-icon="usage"></span><span class="nl">Token usage</span></a>
+      <a href="#/observability" data-route="observability"><span data-icon="activity"></span><span class="nl">Observability</span></a>
+    </nav>
+  </aside>
 
-  <div class="grid hidden" data-signed-in>
-    <div>
-      <div class="panel">
-        <h2>Participants <span class="spacer"></span><button class="small primary" id="newPartBtn">+ Enroll</button></h2>
-        <div class="muted" id="whoami" style="margin-bottom:8px"></div>
-        <div class="row" style="margin-bottom:8px">
-          <input id="q" placeholder="Search name, id, phone" style="flex:1">
-          <select id="statusFilter">
-            <option value="">All statuses</option>
-            <option>prospect</option><option>screening</option><option>enrolled</option>
-            <option>screen_failed</option><option>withdrawn</option>
-          </select>
-        </div>
-        <div class="list" id="partList"></div>
-      </div>
-      <div class="panel">
-        <h2>Requests from participants <span id="reqBadge"></span><span class="spacer"></span><button class="small" id="reqRefresh">Refresh</button></h2>
-        <div id="staffRequests" class="muted">None</div>
-      </div>
-    </div>
-
-    <div>
-      <div class="panel hidden" id="enrollPanel">
-        <h2>Enroll a participant <span class="spacer"></span><button class="small" data-close="enrollPanel">Close</button></h2>
-        <form class="form" id="enrollForm">
-          <label>Full name *<input name="full_name" required value="Casey Morgan"></label>
-          <label>Phone (E.164) *<input name="phone_e164" required value="+17325550199"></label>
-          <label>Email<input name="email" value="casey@example.org"></label>
-          <label>Date of birth<input name="date_of_birth" type="date"></label>
-          <label>Study *<input name="study_id" required value="KOA-301"></label>
-          <label>Site *<select name="site_id" id="enrollSite"></select></label>
-          <label>Status<select name="status"><option>enrolled</option><option>screening</option><option>prospect</option></select></label>
-          <label>Language<select name="preferred_language"><option>en</option><option>es</option></select></label>
-          <label>Time zone<input name="timezone" value="America/New_York"></label>
-          <label class="inline"><input type="checkbox" name="whatsapp_opt_in" checked> WhatsApp opt-in</label>
-          <div class="wide row"><button class="primary">Enroll</button><span class="muted">Synthetic data only. Use 555 numbers and example.org addresses.</span></div>
-        </form>
+  <div class="content">
+    <header class="app-header" id="appHeader"></header>
+    <main id="main" tabindex="-1">
+      <div class="panel" data-signed-out>
+        <div class="empty"><span data-icon="user"></span><b>Sign in to the staff portal</b>
+          <p>Choose a coordinator or PI from the account menu at the top right. In production this is the staff Cognito pool with MFA.</p></div>
       </div>
 
-      <div class="panel" id="detailEmpty"><span class="muted">Select a participant.</span></div>
+      <div class="hidden" data-signed-in>
+        <a class="banner hidden" id="alertBanner" href="#/alerts">
+          <span data-icon="siren"></span><span id="alertBannerText"></span>
+          <span class="btn small">Review alerts</span>
+        </a>
 
-      <div id="detail" class="hidden">
-        <div class="panel">
-          <h2><span id="dTitle"></span> <span class="spacer"></span>
-            <button class="small danger" id="withdrawBtn">Withdraw</button></h2>
-          <form class="form" id="profileForm"></form>
-        </div>
-
-        <div class="panel">
-          <h2>Reminders and dosing <span class="spacer"></span><button class="small primary" id="newRemBtn">+ New reminder</button></h2>
-          <form class="form hidden" id="remForm" style="margin-bottom:12px">
-            <label>Type<select name="reminder_type"><option>dose</option><option>visit</option><option>diary</option><option>custom</option></select></label>
-            <label>Label *<input name="label" value="Morning dose"></label>
-            <label data-dose>Dose label {{1}}<input name="dose_label" value="morning"></label>
-            <label data-dose>Instructions {{2}}<input name="dose_instructions" value="1 tablet with water"></label>
-            <label data-nondose class="hidden">Template<input name="template_name" placeholder="visit_reminder_v1"></label>
-            <label>Schedule<select name="kind"><option value="recurring">Recurring</option><option value="one_time">One time</option></select></label>
-            <label data-rec>Time (participant's zone)<input name="time" type="time" value="08:00"></label>
-            <label data-one class="hidden">Send at<input name="send_at" type="datetime-local"></label>
-            <label data-rec>Starts on<input name="starts_on" type="date"></label>
-            <label data-rec>Ends on<input name="ends_on" type="date"></label>
-            <label>Escalate after misses<input name="escalate_after_misses" type="number" min="1" placeholder="optional"></label>
-            <label>Status<select name="status"><option>active</option><option>draft</option></select></label>
-            <div class="wide days" data-rec>
-              <span class="muted">Days (none = every day):</span>
-              <label><input type="checkbox" value="MON">Mon</label><label><input type="checkbox" value="TUE">Tue</label>
-              <label><input type="checkbox" value="WED">Wed</label><label><input type="checkbox" value="THU">Thu</label>
-              <label><input type="checkbox" value="FRI">Fri</label><label><input type="checkbox" value="SAT">Sat</label>
-              <label><input type="checkbox" value="SUN">Sun</label>
+        <!-- ============================================================ overview -->
+        <section data-page="overview" class="overview" aria-labelledby="h-overview">
+          <div class="page-head">
+            <div>
+              <h1 id="h-overview" tabindex="-1">Overview</h1>
+              <p id="ovScope">What needs attention at your sites today.</p>
             </div>
-            <div class="wide row"><button class="primary">Save reminder</button><button type="button" data-close="remForm">Cancel</button></div>
-          </form>
-          <div class="table-wrap" id="remTable"></div>
-        </div>
-
-        <div class="panel">
-          <div class="tabs" id="dTabs">
-            <button data-tab="events" class="on">Clinical timeline</button>
-            <button data-tab="adherence">Adherence</button>
-            <button data-tab="communications">Communications</button>
+            <div class="actions"><span class="live off" id="ovLive"><i></i>Connecting</span></div>
           </div>
-          <div class="table-wrap" id="dTabBody"></div>
-        </div>
-      </div>
-    </div>
-  </div>
+          <div class="kpis">
+            <a class="kpi" href="#/alerts" id="kpiAlertsTile"><span>Open emergency alerts</span><b id="kpiAlerts">–</b><small id="kpiAlertsSub">Waiting for a person</small></a>
+            <a class="kpi" href="#/participants"><span>Enrolled participants</span><b id="kpiEnrolled">–</b><small id="kpiEnrolledSub">At your sites</small></a>
+            <a class="kpi" href="#/requests" id="kpiRequestsTile"><span>Requests waiting</span><b id="kpiRequests">–</b><small>From participants</small></a>
+            <a class="kpi" href="#/usage"><span>Agent replies, 30 days</span><b id="kpiTokens">–</b><small id="kpiTokensSub">Sent by the study agent</small></a>
+          </div>
+          <div class="cols-2 even">
+            <div class="panel">
+              <div class="panel-head"><h2>Active alerts</h2><div class="actions"><a href="#/alerts">View all alerts</a></div></div>
+              <div id="ovAlerts"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Waiting requests</h2><div class="actions"><a href="#/requests">Open requests</a></div></div>
+              <div id="ovRequests"></div>
+            </div>
+          </div>
+          <div class="cols-2 even section-gap">
+            <div class="panel">
+              <div class="panel-head"><h2>Enrollment by site</h2><div class="actions"><a href="#/participants">All participants</a></div></div>
+              <p class="panel-note">Sites with nobody enrolled are flagged, so a stalled site shows up early.</p>
+              <div id="ovSites"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>May need a check-in</h2></div>
+              <p class="panel-note">Signals that someone could drop out. Each one says where it came from; none is a diagnosis.</p>
+              <div id="ovRisk"></div>
+            </div>
+          </div>
+        </section>
 
-  <div class="hidden" data-signed-in>
-    <div class="panel" id="otelPanel">
-        <h2>Observability (OpenTelemetry) <span class="spacer"></span>
-          <label class="inline" title="The widgets poll the API every few seconds; hide that noise"><input type="checkbox" id="otelSelf"> include widget polling</label>
-          <button class="small" id="otelRefresh">Refresh</button></h2>
-        <div id="otelBody" class="muted">Loading...</div>
+        <!-- ============================================================ alerts -->
+        <section data-page="alerts" hidden aria-labelledby="h-alerts">
+          <div class="page-head">
+            <div>
+              <div class="title"><h1 id="h-alerts" tabindex="-1">Emergency alerts</h1><span id="alertBadge"></span></div>
+              <p>Adverse-event reports and emergency words detected in chat. Open, life-threatening alerts come first.</p>
+            </div>
+            <div class="actions">
+              <span class="live off" id="alertsLive"><i></i>Connecting</span>
+              <div class="tabs" id="alertTabs" role="group" aria-label="Show alerts">
+                <button type="button" data-scope="active" class="on" aria-pressed="true">Active</button>
+                <button type="button" data-scope="resolved" aria-pressed="false">Resolved</button>
+              </div>
+            </div>
+          </div>
+          <div class="card-stack" id="alertList"></div>
+        </section>
+
+        <!-- ============================================================ participants -->
+        <section data-page="participants" hidden aria-labelledby="h-participants">
+          <div class="page-head">
+            <div>
+              <h1 id="h-participants" tabindex="-1">Participants</h1>
+              <p id="whoami">Enroll participants, update their details and set dose and visit reminders.</p>
+            </div>
+            <div class="actions"><button class="primary" id="newPartBtn" type="button"><span data-icon="plus"></span>Enroll participant</button></div>
+          </div>
+
+          <div class="panel flush">
+            <div class="toolbar filters">
+              <div class="search"><span data-icon="search"></span><input id="q" type="search" placeholder="Search by name, ID or phone" aria-label="Search participants"></div>
+              <select id="statusFilter" aria-label="Filter by status">
+                <option value="">All statuses</option>
+                <option value="prospect">Prospect</option><option value="screening">Screening</option><option value="enrolled">Enrolled</option>
+                <option value="screen_failed">Screen failed</option><option value="withdrawn">Withdrawn</option>
+              </select>
+              <span class="toolbar-note" id="partCount" aria-live="polite"></span>
+            </div>
+            <div id="partList"></div>
+          </div>
+
+          <!-- One participant, or the enrollment form, in a card that slides in from the right. "Open as page" moves the same
+               detail into the participant page below (sidebar and breadcrumbs stay), at #/participants/<id>. -->
+          <dialog class="sheet" id="pSheet" aria-labelledby="sheetTitle">
+            <div class="sheet-bar">
+              <h2 id="sheetTitle">Participant</h2>
+              <span class="spacer"></span>
+              <button type="button" class="icon-btn" id="sheetExpand" aria-label="Open as a full page" title="Open as a full page"><span data-icon="expand"></span></button>
+              <button type="button" class="icon-btn" id="sheetClose" aria-label="Close" title="Close (Esc)"><span data-icon="x"></span></button>
+            </div>
+            <div class="sheet-body">
+              <div class="hidden" id="enrollPanel">
+                <p class="panel-note">Enrolling creates the participant's sign-in for the participant site.</p>
+                <form class="form" id="enrollForm">
+                  <label>Full name<input name="full_name" required value="Casey Morgan" autocomplete="off"></label>
+                  <label>Phone <span class="hint">E.164, e.g. +17325550199</span><input name="phone_e164" type="tel" required value="+17325550199"></label>
+                  <label>Email <span class="hint">(optional)</span><input name="email" type="email" value="casey@example.org"></label>
+                  <label>Date of birth <span class="hint">(optional)</span><input name="date_of_birth" type="date"></label>
+                  <label>Study<input name="study_id" required value="KOA-301"></label>
+                  <label>Site<select name="site_id" id="enrollSite"></select></label>
+                  <label>Status<select name="status"><option value="enrolled">Enrolled</option><option value="screening">Screening</option><option value="prospect">Prospect</option></select></label>
+                  <label>Language<select name="preferred_language"><option value="en">English</option><option value="es">Spanish</option></select></label>
+                  <label>Time zone<input name="timezone" value="America/New_York"></label>
+                  <label class="inline"><input type="checkbox" name="whatsapp_opt_in" checked> Send WhatsApp reminders</label>
+                  <div class="wide actions"><button class="primary">Enroll participant</button><span class="form-note">Synthetic data only. Use 555 numbers and example.org addresses.</span></div>
+                </form>
+              </div>
+      <div id="detail" class="hidden">
+                <div class="sheet-section">
+                  <div class="detail-head">
+                    <div class="avatar lg" id="dAvatar" aria-hidden="true"></div>
+                    <div><h2 id="dTitle"></h2><div class="meta" id="dMeta"></div></div>
+                    <div class="actions"><button class="small" id="editBtn" type="button"><span data-icon="pencil"></span>Edit details</button>
+                      <button class="small danger" id="withdrawBtn" type="button">Withdraw</button></div>
+                  </div>
+                  <!-- Read first, edit on request: the details as a summary, the form only after "Edit details". -->
+                  <dl class="profile-facts" id="profileFacts"></dl>
+                  <form class="form hidden" id="profileForm"></form>
+                </div>
+
+                <div class="sheet-section">
+                  <div class="panel-head"><h2>Reminders and dosing</h2><div class="actions"><button class="small primary" id="newRemBtn" type="button"><span data-icon="plus"></span>New reminder</button></div></div>
+                  <form class="form hidden mb-section" id="remForm">
+                    <label>Type<select name="reminder_type"><option value="dose">Dose</option><option value="visit">Visit</option><option value="diary">Diary</option><option value="custom">Custom</option></select></label>
+                    <label>Label<input name="label" value="Morning dose"></label>
+                    <label data-dose>Dose name <span class="hint">template {{1}}</span><input name="dose_label" value="morning"></label>
+                    <label data-dose>Instructions <span class="hint">template {{2}}</span><input name="dose_instructions" value="1 tablet with water"></label>
+                    <label data-nondose class="hidden">Template<input name="template_name" placeholder="visit_reminder_v1"></label>
+                    <label>Schedule<select name="kind"><option value="recurring">Recurring</option><option value="one_time">One time</option></select></label>
+                    <label data-rec>Time <span class="hint">participant's time zone</span><input name="time" type="time" value="08:00"></label>
+                    <label data-one class="hidden">Send at<input name="send_at" type="datetime-local"></label>
+                    <label data-rec>Starts on <span class="hint">(optional)</span><input name="starts_on" type="date"></label>
+                    <label data-rec>Ends on <span class="hint">(optional)</span><input name="ends_on" type="date"></label>
+                    <label>Escalate after misses <span class="hint">(optional)</span><input name="escalate_after_misses" type="number" min="1" placeholder="3"></label>
+                    <label>Status<select name="status"><option value="active">Active</option><option value="draft">Draft</option></select></label>
+                    <fieldset class="wide days bare" data-rec>
+                      <legend class="sr-only">Days</legend>
+                      <span class="muted">Days (none selected means every day)</span>
+                      <label><input type="checkbox" value="MON">Mon</label><label><input type="checkbox" value="TUE">Tue</label>
+                      <label><input type="checkbox" value="WED">Wed</label><label><input type="checkbox" value="THU">Thu</label>
+                      <label><input type="checkbox" value="FRI">Fri</label><label><input type="checkbox" value="SAT">Sat</label>
+                      <label><input type="checkbox" value="SUN">Sun</label>
+                    </fieldset>
+                    <div class="wide actions"><button class="primary">Save reminder</button><button type="button" data-close="remForm">Cancel</button></div>
+                  </form>
+                  <div id="remTable"></div>
+                </div>
+
+                <div class="sheet-section">
+                  <div class="panel-head">
+                    <h2>Records</h2>
+                    <div class="actions tabs" id="dTabs" role="group" aria-label="Show records">
+                      <button type="button" data-tab="events" class="on" aria-pressed="true">Clinical timeline</button>
+                      <button type="button" data-tab="adherence" aria-pressed="false">Adherence</button>
+                      <button type="button" data-tab="communications" aria-pressed="false">Communications</button>
+                    </div>
+                  </div>
+                  <div id="dTabBody"></div>
+                </div>
+              </div>
+            </div>
+          </dialog>
+        </section>
+
+        <!-- ============================================================ requests -->
+        <!-- ============================================================ one participant, as a full page -->
+        <section data-page="participant" hidden aria-labelledby="h-participant">
+          <h1 class="sr-only" id="h-participant" tabindex="-1">Participant</h1>
+          <div class="panel" id="detailPage"></div>
+        </section>
+
+        <section data-page="requests" hidden aria-labelledby="h-requests">
+          <div class="page-head">
+            <div>
+              <div class="title"><h1 id="h-requests" tabindex="-1">Requests</h1><span id="reqBadge"></span></div>
+              <p>Questions participants send from their study page. Reply in one click, or write your own answer.</p>
+            </div>
+            <div class="actions"><button id="reqRefresh" type="button"><span data-icon="refresh"></span>Refresh</button></div>
+          </div>
+          <div class="card-stack" id="staffRequests"></div>
+        </section>
+
+        <!-- ============================================================ team -->
+        <section data-page="team" hidden aria-labelledby="h-team">
+          <div class="page-head">
+            <div>
+              <h1 id="h-team" tabindex="-1">Team</h1>
+              <p>Any coordinator or PI can invite, edit or disable staff accounts.</p>
+            </div>
+            <div class="actions"><button class="primary" id="inviteBtn" type="button"><span data-icon="plus"></span>Invite staff member</button></div>
+          </div>
+          <div class="panel hidden" id="teamFormWrap">
+            <div class="panel-head"><h2 id="teamFormTitle">Invite a staff member</h2></div>
+            <form class="form" id="teamForm">
+              <label>Email<input name="email" type="email" required value="newcoordinator@riverside.example.org"></label>
+              <label>Name<input name="name" value="Avery Kim"></label>
+              <label>Role<select name="role"><option value="coordinator">Coordinator</option><option value="PI">PI</option></select></label>
+              <label>Sites <span class="hint">comma separated</span><input name="site_ids" value="RIVERSIDE"></label>
+              <label>Studies <span class="hint">empty means any</span><input name="study_ids" value="KOA-301"></label>
+              <div class="wide actions"><button class="primary" id="teamSave">Send invite</button><button type="button" id="teamCancel">Cancel</button>
+                <span class="form-note">Cognito emails a temporary password. MFA setup is required at first sign-in.</span></div>
+            </form>
+          </div>
+          <div class="panel flush" id="teamPanel"><div id="teamBody"></div></div>
+        </section>
+
+        <!-- ============================================================ usage -->
+        <section data-page="usage" hidden aria-labelledby="h-usage">
+          <div class="page-head">
+            <div>
+              <h1 id="h-usage" tabindex="-1">Token usage</h1>
+              <p>Tokens used by the participant chat agent.</p>
+            </div>
+            <div class="actions">
+              <span class="live off" id="usageLive"><i></i>Connecting</span>
+              <select id="usageDays" aria-label="Period"><option value="1">Today</option><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option></select>
+            </div>
+          </div>
+          <div class="panel" id="usagePanel"><div id="usageBody"></div></div>
+        </section>
+
+        <!-- ============================================================ observability -->
+        <section data-page="observability" hidden aria-labelledby="h-observability">
+          <div class="page-head">
+            <div>
+              <h1 id="h-observability" tabindex="-1">Observability</h1>
+              <p>Requests, errors and latency recorded on this Lambda instance.</p>
+            </div>
+            <div class="actions">
+              <span class="live off" id="otelLive"><i></i>Connecting</span>
+              <label class="inline"><input type="checkbox" id="otelSelf"> Include widget polling</label>
+              <button id="otelRefresh" type="button"><span data-icon="refresh"></span>Refresh</button>
+            </div>
+          </div>
+          <div class="panel" id="otelPanel"><div id="otelBody"></div></div>
+        </section>
       </div>
+    </main>
+    <footer class="site-footer" id="appFooter"></footer>
   </div>
-</main>
+</div>
 
 <script src="/ui/common.js"></script>
 <script src="/ui/widgets.js"></script>
 <script>
-const state = { pid: null, tab: 'events', reminders: [], me: null };
+const state = { pid: null, tab: 'events', reminders: [], me: null, page: 'overview' };
 
+// ------------------------------------------------------------ pages (hash routes)
+const ROUTES = { overview: 'Overview', alerts: 'Emergency alerts', participants: 'Participants', requests: 'Requests',
+  team: 'Team', usage: 'Token usage', observability: 'Observability' };
+
+function route(moveFocus) {
+  const [, want, sub] = /^#\/(\w+)(?:\/([^/]+))?/.exec(location.hash) || [];
+  // #/participants/<id>: one participant as a full page, under Participants in the sidebar and the breadcrumbs.
+  const page = want === 'participants' && sub ? 'participant' : ROUTES[want] ? want : 'overview';
+  const navPage = page === 'participant' ? 'participants' : page;
+  state.page = page;
+  closeSheet(page === 'participant');
+  $$('[data-page]').forEach(s => { s.hidden = s.dataset.page !== page; });
+  setCrumbs(page === 'participant' ? [['Staff', '#/overview'], ['Participants', '#/participants'], [state.pid === decodeURIComponent(sub) && state.detailName ? state.detailName : decodeURIComponent(sub), '']]
+    : [['Staff', '#/overview'], [ROUTES[page], '']]);
+  if (page === 'participant' && TT.user) showDetail(decodeURIComponent(sub), 'page');
+  $$('.nav a').forEach(a => {
+    const on = a.dataset.route === navPage, use = $('use', a);
+    on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
+    if (use) use.setAttribute('href', use.getAttribute('href').replace(/-fill$/, '') + (on ? '-fill' : ''));  // Phosphor fill marks where you are
+  });
+  // On phones the nav scrolls sideways: bring the current page into view once layout has settled.
+  requestAnimationFrame(() => {
+    const cur = $('.nav a[aria-current]'), nav = $('.nav');
+    if (!cur || nav.scrollWidth <= nav.clientWidth) return;
+    const c = cur.getBoundingClientRect(), n = nav.getBoundingClientRect();
+    nav.scrollTo({ left: nav.scrollLeft + (c.left - n.left) - (n.width - c.width) / 2 });
+  });
+  Widgets.baseTitle = `${page === 'participant' ? state.detailName || 'Participant' : ROUTES[page]} · TrialTalk Staff`;
+  setTitle(); syncBanner();
+  if (moveFocus) { $(`#h-${page}`)?.focus(); window.scrollTo(0, 0); }
+  if (page === 'overview' && TT.user) loadOverview();
+}
+addEventListener('hashchange', () => route(true));
+
+function goParticipant(pid) {
+  if (location.hash !== '#/participants') location.hash = '#/participants';
+  showDetail(pid);
+}
+
+// ------------------------------------------------------------ sign-in
 async function onSignIn(user) {
   showDetail(null);
-  $('#enrollPanel').classList.add('hidden');
   if (!user) return stopWidgets();
   try {
     state.me = await api('GET', '/staff/me');
   } catch { state.me = null; return; }
-  $('#whoami').textContent = `${state.me.role} · sites ${state.me.site_ids.join(', ')} · studies ${state.me.study_ids.join(', ') || 'any'}`;
-  $('#enrollSite').innerHTML = state.me.site_ids.map(s => `<option>${esc(s)}</option>`).join('');
-  loadParticipants(); loadStaffRequests(); startWidgets();
+  const me = state.me, name = TT.identity?.name || TT.user;
+  const today = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
+  const sites = new Intl.ListFormat(undefined, { type: 'conjunction' }).format(me.site_ids.map(s => humanize(s.toLowerCase())));
+  $('#ovScope').textContent = `${today} · ${sites} · Study ${me.study_ids.join(', ') || 'any'}`;
+  $('#whoami').textContent = `Enroll participants at ${sites}, update their details and set dose and visit reminders.`;
+  $('#enrollSite').innerHTML = me.site_ids.map(s => `<option>${esc(s)}</option>`).join('');
+  $('#partList').innerHTML = skeleton(4);
+  loadParticipants(); loadStaffRequests(); startWidgets(); route(false);
+  // Alert trails name whoever acted. Names come from the team list, so load it up front, quietly: a role without
+  // access to it still sees usernames.
+  api('GET', '/staff/accounts', undefined, { quiet: true }).then(o => { Widgets.team = o.accounts || []; loadAlerts(); }).catch(() => {});
+  Widgets.timers.push(setInterval(() => loadStaffRequests(true).catch(() => {}), 15000));
 }
 
+// ------------------------------------------------------------ overview
+async function loadOverview() {
+  const [{ participants }, usage, { requests }] = await Promise.all([
+    api('GET', '/staff/participants', undefined, { quiet: true }),
+    api('GET', '/staff/usage?days=30', undefined, { quiet: true }),
+    api('GET', '/staff/requests', undefined, { quiet: true }),
+  ]).catch(() => [{ participants: [] }, null, { requests: [] }]);
+  renderSites(participants);
+  renderRisk(participants, requests);
+  const enrolled = participants.filter(p => p.status === 'enrolled').length;
+  $('#kpiEnrolled').textContent = enrolled;
+  $('#kpiEnrolledSub').textContent = `of ${participants.length} at your sites`;
+  setCount('#navParticipants', participants.length);
+  if (usage) {
+    const t = usage.totals;
+    $('#kpiTokens').textContent = nf(t.calls);
+    $('#kpiTokensSub').textContent = `${nf(+t.input_tokens + +t.output_tokens)} tokens used`;
+  }
+}
+
+// Enrollment by site: every site the signed-in person covers, including ones with no participants at all.
+function renderSites(participants) {
+  const sites = state.me?.site_ids || [];
+  const order = ['enrolled', 'screening', 'prospect', 'screen_failed', 'withdrawn'];
+  $('#ovSites').innerHTML = sites.length ? `<div class="site-rows">${sites.map(site => {
+    const here = participants.filter(p => p.site_id === site), n = s => here.filter(p => p.status === s).length;
+    const total = here.length || 1, enrolled = n('enrolled');
+    return `<div class="site-row">
+      <div class="site-name"><b>${esc(humanize(site.toLowerCase()))}</b>${enrolled ? `<span>${enrolled} enrolled of ${here.length}</span>`
+        : `<span class="pill tone-warn"><span class="dot"></span>No one enrolled yet</span>`}</div>
+      <div class="stack-bar" role="img" aria-label="${order.map(st => `${n(st)} ${humanize(st).toLowerCase()}`).join(', ')}">
+        ${order.map(st => n(st) ? `<i class="sb-${STATUS_TONE[st]}" style="flex-grow:${n(st) / total}" title="${n(st)} ${esc(humanize(st).toLowerCase())}"></i>` : '').join('') || '<i class="sb-empty"></i>'}</div>
+      <div class="site-legend">${order.filter(st => n(st)).map(st => `<span><i class="sb-${STATUS_TONE[st]}"></i>${n(st)} ${esc(humanize(st).toLowerCase())}</span>`).join('') || '<span>No participants yet</span>'}</div>
+    </div>`;
+  }).join('')}</div>` : emptyState('users', 'No sites', 'Your account has no sites assigned.');
+}
+
+// Dropout signals for enrolled participants, from data the portal already has: open requests to leave, pause or stop
+// WhatsApp; WhatsApp switched off; and fewer than 80% of doses taken over 30 days (once there are at least 3 replies).
+async function renderRisk(participants, requests) {
+  const enrolled = participants.filter(p => p.status === 'enrolled');
+  const adherence = await Promise.all(enrolled.map(p =>
+    api('GET', `/staff/participants/${p.participant_id}/adherence`, undefined, { quiet: true }).catch(() => null)));
+  const ASKS = { withdrawal: 'Asked to leave the study', reminder_pause: 'Asked to pause reminders', whatsapp_opt_out: 'Asked to stop WhatsApp messages' };
+  const flagged = enrolled.map((p, i) => {
+    const why = [];
+    for (const r of requests.filter(r => r.participant_id === p.participant_id && !r.answered))
+      if (ASKS[kindOf(r)]) why.push(['warn', ASKS[kindOf(r)], 'Request']);
+    if (!p.whatsapp_opt_in) why.push(['warn', 'Not getting WhatsApp reminders', 'Profile']);
+    const a = adherence[i];
+    if (a && a.total >= 3 && a.taken_rate !== null && a.taken_rate < 0.8)
+      why.push(['warn', `Took ${Math.round(a.taken_rate * 100)}% of doses`, `${a.total} replies, 30 days`]);
+    return { p, why };
+  }).filter(x => x.why.length).sort((x, y) => y.why.length - x.why.length);
+  $('#ovRisk').innerHTML = flagged.length ? `<div class="risk-rows">${flagged.map(({ p, why }) => `
+    <div class="risk-row"><div class="risk-who"><a href="#/participants" data-pid="${esc(p.participant_id)}">${esc(p.full_name)}</a>
+      <span class="tag">${esc(p.participant_id)}</span></div>
+      <div class="tag-list">${why.map(([tone, text, src]) => `<span class="pill tone-${tone}" title="Source: ${esc(src)}"><span class="dot"></span>${esc(text)}</span>`).join('')}</div></div>`).join('')}</div>`
+    : emptyState('check', 'No one flagged', enrolled.length ? 'No open requests to leave or pause, WhatsApp is on, and dose replies look steady.' : 'Nobody is enrolled yet.');
+}
+
+// Sidebar counts. notify: something waits for a person (alerts, requests); the collapsed rail shows those as a red dot.
+// Totals (participants) are information, not notifications: no dot on the rail.
+function setCount(sel, n, kind) {
+  const el = $(sel);
+  el.className = `count${kind ? ' notify' : ''}${kind === 'bad' ? ' bad' : ''}${n ? '' : ' hidden'}`;
+  el.textContent = n;
+}
+
+// ------------------------------------------------------------ participants
 async function loadParticipants() {
   const q = new URLSearchParams();
   if ($('#q').value) q.set('q', $('#q').value);
   if ($('#statusFilter').value) q.set('status', $('#statusFilter').value);
   const { participants } = await api('GET', '/staff/participants' + (q.toString() ? '?' + q : ''));
-  $('#partList').innerHTML = participants.length ? participants.map(p => `
-    <button data-pid="${esc(p.participant_id)}" class="${p.participant_id === state.pid ? 'on' : ''}">
-      <span><b>${esc(p.participant_id)}</b> ${esc(p.full_name)} ${chip(p.status)}</span>
-      <small>${esc(p.site_id)} · ${esc(p.phone_e164)}${p.whatsapp_opt_in ? '' : ' · no WhatsApp'}</small>
-    </button>`).join('') : '<span class="muted">No participants visible at your sites.</span>';
+  const filtered = $('#q').value || $('#statusFilter').value;
+  $('#partCount').textContent = `${participants.length} ${participants.length === 1 ? 'participant' : 'participants'}`;
+  $('#partList').innerHTML = participants.length ? `<div class="table-wrap"><table class="data-table rows-link">
+    <thead><tr><th scope="col">Participant</th><th scope="col">Status</th><th scope="col">Site</th><th scope="col">Phone</th>
+      <th scope="col">Email</th><th scope="col">WhatsApp</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
+    <tbody>${participants.map(p => { const pid = esc(p.participant_id); return `<tr data-row-pid="${pid}" ${p.participant_id === state.pid ? 'aria-current="true"' : ''}>
+      <td data-label="Participant"><button type="button" class="row-link" data-pid="${pid}"><span class="avatar sm" aria-hidden="true">${esc(initials(p.full_name))}</span>
+        <span class="who"><b>${esc(p.full_name)}</b><span>${pid}</span></span></button></td>
+      <td data-label="Status">${chip(p.status)}</td>
+      <td data-label="Site">${esc(humanize(String(p.site_id).toLowerCase()))}</td>
+      <td data-label="Phone" class="num nowrap">${esc(p.phone_e164)}</td>
+      <td data-label="Email" class="email-cell">${copyable(p.email)}</td>
+      <td data-label="WhatsApp">${p.whatsapp_opt_in ? 'On' : '<span class="muted">Off</span>'}</td>
+      <td class="actions-cell go-cell" aria-hidden="true">${icon('chevron', 'sm')}</td></tr>`; }).join('')}</tbody></table></div>`
+    : filtered ? emptyState('search', 'No matching participants', 'Try another name, ID or phone, or clear the status filter.')
+      : emptyState('users', 'No participants yet', 'Enroll the first participant at your sites.');
+}
+
+// The participant card: a modal <dialog> (focus stays inside, Esc closes) that slides in from the right.
+// The detail view is one element, placed either in the card or in the participant page.
+const sheet = () => $('#pSheet');
+function placeDetail(where) {
+  const d = $('#detail'), home = where === 'page' ? $('#detailPage') : $('.sheet-body', sheet());
+  if (d.parentElement !== home) home.append(d);
+}
+function openSheet(mode) {
+  if (mode === 'detail') placeDetail('sheet');
+  $('#enrollPanel').classList.toggle('hidden', mode !== 'enroll');
+  $('#detail').classList.toggle('hidden', mode !== 'detail');
+  if (mode === 'enroll') $('#sheetTitle').textContent = 'Enroll a participant';
+  if (!sheet().open) sheet().showModal();
+  $('.sheet-body', sheet()).scrollTop = 0;
+}
+// instant: the card becomes the full page, so it must not slide away empty while the page takes its place.
+function closeSheet(instant) {
+  const s = sheet(); if (!s.open) return;
+  s.classList.toggle('instant', !!instant); s.close();
+  if (instant) requestAnimationFrame(() => s.classList.remove('instant'));
 }
 
 // One-click replies. Staff are responsible for what they send, so the wording promises only what a click can back up.
@@ -181,143 +478,269 @@ const QUICK = {
   history_correction: [['Will review', 'We will review your correction with you at your next visit.']],
 };
 const kindOf = r => (/\]\s*(\w+)\s*$/.exec(r.subject || '') || [])[1] || '';
+const KIND_LABEL = { reminder_change: 'Reminder change', reminder_pause: 'Pause reminders', profile_change: 'Profile change', withdrawal: 'Leave the study',
+  whatsapp_opt_out: 'WhatsApp opt-out', contact_team: 'Contact the team', history_correction: 'History correction' };
+const kindLabel = k => KIND_LABEL[k] || humanize(k) || 'Request';
 state.requests = []; state.openReq = null;
 
-async function loadStaffRequests() {
-  const { requests, unanswered } = await api('GET', '/staff/requests');
-  state.requests = requests;
-  $('#reqBadge').innerHTML = unanswered ? `<span class="chip warn">${unanswered} waiting</span>` : '';
-  $('#staffRequests').className = requests.length ? '' : 'muted';
-  $('#staffRequests').innerHTML = requests.length ? requests.map(requestCard).join('') : 'None';
+// quiet: the 15 s background refresh. It skips while a reply is open or counting down, so it never wipes what
+// staff are typing or restarts an undo timer.
+async function loadStaffRequests(quiet) {
+  if (quiet && (!TT.user || state.openReq || Object.keys(state.pending).length)) return;
+  const { requests, unanswered } = await api('GET', '/staff/requests', undefined, { quiet });
+  state.requests = requests; state.unanswered = unanswered;
+  $('#reqBadge').innerHTML = unanswered ? chip('new', `${unanswered} waiting`) : chip('answered', 'All answered');
+  $('#kpiRequests').textContent = unanswered;
+  $('#kpiRequestsTile').classList.toggle('tone-warn', unanswered > 0);
+  setCount('#navRequests', unanswered, 'warn');
+  renderStable($('#staffRequests'), requests.length ? requests.map(requestCard).join('')
+    : emptyState('inbox', 'No requests yet', 'When a participant asks the study team something on the participant site, it shows up here.'));
+  const waiting = requests.filter(r => !r.answered).slice(0, 4);
+  $('#ovRequests').innerHTML = waiting.length ? `<ul class="list">${waiting.map(r => `
+    <li class="req-row" data-goto-req="${esc(r.comm_id)}"><div class="list-main"><b><a href="#/requests">${esc(r.full_name)}</a></b>
+      <span>${esc(kindLabel(kindOf(r)))} · “${esc(r.body_text)}”</span></div>
+      <span class="list-side"><time datetime="${esc(r.created_at)}">${esc(when(r.created_at))}</time></span></li>`).join('')}</ul>`
+    : emptyState('check', 'Nothing waiting', 'Every participant request has a reply.');
 }
 
 function requestCard(r) {
   const id = esc(r.comm_id), open = state.openReq === r.comm_id, kind = kindOf(r);
-  return `<div class="req ${r.answered ? 'answered' : ''} ${open ? 'open' : ''}" data-req="${id}">
-    <div class="top"><a href="#" data-pid="${esc(r.participant_id)}"><b>${esc(r.participant_id)}</b></a> ${esc(r.full_name)}
-      <span class="spacer"></span>${r.answered ? '<span class="chip ok">answered</span>' : '<span class="chip warn">new</span>'}</div>
-    <div class="muted">${esc(kind.replace(/_/g, ' '))} · ${esc(r.created_at)}</div>
-    <div>${esc(r.body_text)}</div>
-    ${r.replies.map(x => `<div class="reply"><span class="muted">${esc(x.from_addr)} · ${esc(x.created_at)}</span><br>${esc(x.body_text)}</div>`).join('')}
-    <div class="row quick">${[RECEIVED, ...(QUICK[kind] || [])].map(([label, text]) =>
-      `<button class="small" data-quick="${id}" data-text="${esc(text)}" title="${esc(text)}">${esc(label)}</button>`).join('')}
-      <button class="small primary" data-write="${id}">${open ? 'Close' : 'Write reply...'}</button></div>
-    ${open ? `<div class="compose"><textarea rows="5" maxlength="4000" placeholder="Write a longer reply. The participant sees it under their request on the website."></textarea>
-      <div class="row"><button class="primary small" data-send="${id}">Send reply</button><span class="muted">Quick replies send immediately.</span></div></div>` : ''}
-  </div>`;
+  const pend = state.pending[r.comm_id];
+  return `<article class="req ${open ? 'open' : ''}" data-req="${id}">
+    <div class="top"><a href="#/participants" data-pid="${esc(r.participant_id)}">${esc(r.full_name)}</a><span class="tag">${esc(r.participant_id)}</span>
+      ${r.answered ? chip('answered') : ''}</div>
+    <div class="kind">${esc(kindLabel(kind))} · <time datetime="${esc(r.created_at)}">${esc(when(r.created_at))}</time></div>
+    <div class="msg">${esc(r.body_text)}</div>
+    ${r.replies.map((x, i, all) => `<div class="reply${state.justSent === r.comm_id && i === all.length - 1 ? ' new' : ''}"><span class="from">${esc(x.from_addr)} · ${esc(when(x.created_at))}</span>${esc(x.body_text)}</div>`).join('')}
+    ${pend ? `<div class="pending" role="status">
+        <div class="pending-text"><b>Sending “${esc(pend.label)}”</b><span>${esc(pend.text)}</span></div>
+        <button type="button" class="small" data-undo="${id}">${icon('undo', 'sm')}Undo</button>
+        <i class="pending-bar" style="animation-duration:${UNDO_MS}ms" aria-hidden="true"></i></div>`
+    : `<div class="row quick"><span class="quick-label">Quick reply</span>${[RECEIVED, ...(QUICK[kind] || [])].map(([label, text]) =>
+      `<button type="button" class="small" data-quick="${id}" data-label="${esc(label)}" data-text="${esc(text)}" title="${esc(text)}">${esc(label)}</button>`).join('')}
+      <span class="spacer"></span><button type="button" class="small ${open ? 'ghost' : 'primary'}" data-write="${id}">${open ? 'Close' : 'Write a reply'}</button></div>`}
+    ${open && !pend ? `<div class="compose"><label>Reply<textarea rows="5" maxlength="4000" placeholder="The participant sees this under their request on the participant site."></textarea></label>
+      <div class="row"><button type="button" class="primary small" data-send="${id}">${icon('send', 'sm')}Send reply</button><span class="form-note">Replies wait 5 seconds before sending, so you can undo.</span></div></div>` : ''}
+  </article>`;
 }
 
 async function sendReply(id, text) {
   await api('POST', `/staff/requests/${id}/reply`, { text });
-  toast('Reply sent'); state.openReq = null; loadStaffRequests();
+  state.justSent = id;  // the new reply eases in where the undo row was
+  toast('Reply sent'); await loadStaffRequests();
+  state.justSent = null;
 }
 
-const PROFILE_FIELDS = [
-  ['full_name', 'Full name *'], ['phone_e164', 'Phone *'], ['date_of_birth', 'Date of birth *', 'date'],
-  ['email', 'Email'], ['address_line1', 'Address'], ['city', 'City'], ['state', 'State'], ['postal_code', 'Postal code'],
-  ['preferred_language', 'Language'], ['timezone', 'Time zone'],
-];
+// Undo window: a reply waits UNDO_MS before it is sent, so an accidental click costs nothing. Nothing reaches the
+// API (or the participant, or the audit trail) until the timer ends, so undo needs no retraction on the backend.
+const UNDO_MS = 5000;
+state.pending = {};  // comm_id -> { text, label, timer }
+function queueReply(id, text, label) {
+  if (state.pending[id]) return;
+  state.pending[id] = { text, label, timer: setTimeout(() => flushReply(id), UNDO_MS) };
+  state.openReq = null;
+  loadStaffRequests();
+}
+function flushReply(id) {
+  const p = state.pending[id]; if (!p) return;
+  clearTimeout(p.timer); delete state.pending[id];
+  sendReply(id, p.text).catch(() => loadStaffRequests());
+}
+function undoReply(id) {
+  const p = state.pending[id]; if (!p) return;
+  clearTimeout(p.timer); delete state.pending[id];
+  toast('Reply cancelled. Nothing was sent.');
+  loadStaffRequests().then(() => $(`[data-req="${CSS.escape(id)}"] [data-quick]`)?.focus());
+}
+// Leaving the page mid-countdown still sends: the click was a decision, only the undo window is cut short.
+addEventListener('pagehide', () => {
+  for (const [id, p] of Object.entries(state.pending)) {
+    fetch(`/api/staff/requests/${id}/reply`, { method: 'POST', keepalive: true, body: JSON.stringify({ text: p.text }),
+      headers: { 'X-Dev-Identity': `staff:${encodeURIComponent(TT.user)}`, 'Content-Type': 'application/json' } });
+  }
+});
 
-async function showDetail(pid) {
+// [key, label, needs a change reason, input type]
+const PROFILE_FIELDS = [
+  ['full_name', 'Full name', 1], ['phone_e164', 'Phone', 1, 'tel'], ['date_of_birth', 'Date of birth', 1, 'date'],
+  ['email', 'Email', 0, 'email'], ['address_line1', 'Address'], ['city', 'City'], ['state', 'State'], ['postal_code', 'Postal code'],
+  ['timezone', 'Time zone'],
+];
+const LANGS = [['en', 'English'], ['es', 'Spanish']];
+const PART_STATUSES = ['prospect', 'screening', 'enrolled', 'screen_failed', 'withdrawn'];
+
+// where: 'sheet' (the card over the list) or 'page' (#/participants/<id>, with the sidebar and breadcrumbs).
+async function showDetail(pid, where = 'sheet') {
   state.pid = pid;
-  $$('#partList button').forEach(b => b.classList.toggle('on', b.dataset.pid === pid));
-  $('#detail').classList.toggle('hidden', !pid);
-  $('#detailEmpty').classList.toggle('hidden', !!pid);
-  if (!pid) return;
+  $$('#partList tr[data-row-pid]').forEach(r => r.dataset.rowPid === pid ? r.setAttribute('aria-current', 'true') : r.removeAttribute('aria-current'));
+  if (!pid) return closeSheet();
+  $('#remForm').classList.add('hidden');
+  if (where === 'page') { placeDetail('page'); $('#detail').classList.remove('hidden'); } else openSheet('detail');
   const { participant: p, reminders } = await api('GET', `/staff/participants/${pid}`);
-  $('#dTitle').innerHTML = `${esc(p.participant_id)} · ${esc(p.full_name)} ${chip(p.status)} <span class="chip">${esc(p.site_id)} / ${esc(p.study_id)}</span>`;
+  $('#dAvatar').textContent = initials(p.full_name);
+  $('#dTitle').textContent = p.full_name;
+  $('#sheetTitle').textContent = 'Participant';
+  state.detailName = p.full_name;
+  if (state.page === 'participant') {
+    $('#h-participant').textContent = p.full_name;
+    setCrumbs([['Staff', '#/overview'], ['Participants', '#/participants'], [p.full_name, '']]);
+    Widgets.baseTitle = `${p.full_name} · TrialTalk Staff`; setTitle();
+  }
+  $('#dMeta').innerHTML = `${chip(p.status)}<span class="tag">${esc(p.participant_id)}</span><span class="tag">${esc(humanize(String(p.site_id).toLowerCase()))}</span>`
+    + `<span class="tag">Study ${esc(p.study_id)}</span>`;
   $('#withdrawBtn').disabled = p.status === 'withdrawn';
-  $('#profileForm').innerHTML = PROFILE_FIELDS.map(([k, l, t]) =>
-    `<label>${esc(l)}<input name="${k}" type="${t || 'text'}" value="${esc(p[k])}" data-orig="${esc(p[k])}"></label>`).join('')
-    + `<label>Status<select name="status" data-orig="${esc(p.status)}">${['prospect', 'screening', 'enrolled', 'screen_failed', 'withdrawn'].map(s =>
-      `<option ${s === p.status ? 'selected' : ''} ${s === 'withdrawn' ? 'disabled' : ''}>${s}</option>`).join('')}</select></label>`
-    + `<label class="inline"><input type="checkbox" name="whatsapp_opt_in" ${p.whatsapp_opt_in ? 'checked' : ''} data-orig="${p.whatsapp_opt_in}"> WhatsApp opt-in</label>`
-    + `<label class="wide">Change reason (* fields need one)<input name="change_reason" placeholder="e.g. Participant reported new phone number"></label>`
-    + `<div class="wide"><button class="primary">Save changes</button> <span class="muted">Only changed fields are sent.</span></div>`;
+  $('#profileForm').innerHTML = PROFILE_FIELDS.map(([k, l, reason, t]) =>
+    `<label>${esc(l)}${reason ? ' <span class="hint">· needs a reason</span>' : ''}<input name="${k}" type="${t || 'text'}" value="${esc(p[k])}" data-orig="${esc(p[k])}"></label>`).join('')
+    + `<label>Language<select name="preferred_language" data-orig="${esc(p.preferred_language)}">${LANGS.map(([v, l]) =>
+      `<option value="${v}" ${p.preferred_language === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`
+    + `<label>Status<select name="status" data-orig="${esc(p.status)}">${PART_STATUSES.map(s =>
+      `<option value="${s}" ${s === p.status ? 'selected' : ''} ${s === 'withdrawn' ? 'disabled' : ''}>${esc(humanize(s))}</option>`).join('')}</select></label>`
+    + `<label class="inline"><input type="checkbox" name="whatsapp_opt_in" ${p.whatsapp_opt_in ? 'checked' : ''} data-orig="${p.whatsapp_opt_in}"> Send WhatsApp reminders</label>`
+    + `<label class="wide">Change reason <span class="hint">required when changing name, phone or date of birth</span><input name="change_reason" placeholder="e.g. Participant reported a new phone number"></label>`
+    + `<div class="wide actions"><button class="primary">Save changes</button><button type="button" data-cancel-edit>Cancel</button><span class="form-note">Only changed fields are sent.</span></div>`;
+  const addr = [p.address_line1, p.city, p.state, p.postal_code].filter(Boolean).join(', ');
+  const lang = LANGS.find(([v]) => v === p.preferred_language)?.[1] || p.preferred_language;
+  const fact = (label, html) => `<div><dt>${esc(label)}</dt><dd${html ? '' : ' class="none"'}>${html || 'Not given'}</dd></div>`;
+  $('#profileFacts').innerHTML = fact('Phone', p.phone_e164 ? copyable(p.phone_e164, 'phone number') : '')
+    + fact('Email', p.email ? copyable(p.email) : '') + fact('Date of birth', p.date_of_birth ? esc(when(p.date_of_birth)) : '')
+    + fact('Address', esc(addr)) + fact('Time zone', esc(String(p.timezone || '').replace(/_/g, ' ')))
+    + fact('Language', esc(lang || '')) + fact('WhatsApp reminders', p.whatsapp_opt_in ? 'On' : 'Off');
+  setEditing(false);
   renderReminders(reminders);
   loadTab();
 }
 
+function setEditing(on) {
+  $('#profileFacts').hidden = on;
+  $('#profileForm').classList.toggle('hidden', !on);
+  $('#editBtn').hidden = on;
+  if (on) $('#profileForm input')?.focus();
+}
+
 function renderReminders(reminders) {
   state.reminders = reminders;
-  $('#remTable').innerHTML = table(reminders.map(r => ({
-    label: r.label, type: r.reminder_type,
-    dose: r.reminder_type === 'dose' ? `${r.template_params?.['1'] ?? ''}: ${r.template_params?.['2'] ?? ''}` : '',
-    schedule: r.send_at ? 'Once at ' + r.send_at : describeCron(r.cron_expr), timezone: r.timezone,
-    status: r.status, next_send_at: r.next_send_at, sent: r.send_count, _r: r,
-  })), ['label', 'type', 'dose', 'schedule', 'timezone', 'status', 'next_send_at', 'sent'], r => {
-    const s = r._r.status, id = esc(r._r.reminder_id), open = !['cancelled', 'completed'].includes(s);
-    return `<div class="row">`
-      + (s === 'active' ? `<button class="small" data-rem="pause" data-id="${id}">Pause</button>` : '')
-      + (s === 'paused' || s === 'draft' ? `<button class="small" data-rem="resume" data-id="${id}">Activate</button>` : '')
-      + (open ? `<button class="small" data-rem="time" data-id="${id}">Change time</button>` : '')
-      + (s === 'active' ? `<button class="small" data-rem="send" data-id="${id}">Send now</button>` : '')
-      + (open ? `<button class="small danger" data-rem="cancel" data-id="${id}">Cancel</button>` : '')
-      + `<button class="small" data-rem="log" data-id="${id}">History</button></div>`;
-  });
+  $('#remTable').innerHTML = reminders.length ? reminders.map(r => {
+    const s = r.status, id = esc(r.reminder_id), open = !['cancelled', 'completed'].includes(s);
+    const dose = r.reminder_type === 'dose' ? [r.template_params?.['1'], r.template_params?.['2']].filter(Boolean).join(' · ') : '';
+    return `<article class="rem ${open ? '' : 'inactive'}">
+      <div class="l1"><b>${esc(r.label)}</b>${chip(s)}<span class="tag">${esc(humanize(r.reminder_type))}</span></div>
+      ${dose ? `<div>${esc(dose)}</div>` : ''}
+      <div class="meta"><span>${icon('clock', 'sm')}${esc(r.send_at ? 'Once, ' + when(r.send_at) : describeCron(r.cron_expr))}</span>
+        <span>${esc(r.timezone)}</span>${r.next_send_at && open ? `<span>Next ${esc(when(r.next_send_at))}</span>` : ''}<span>Sent ${nf(r.send_count)}</span></div>
+      <div class="row">`
+      + (s === 'active' ? `<button type="button" class="small" data-rem="pause" data-id="${id}">Pause</button>` : '')
+      + (s === 'paused' || s === 'draft' ? `<button type="button" class="small" data-rem="resume" data-id="${id}">Activate</button>` : '')
+      + (open ? `<button type="button" class="small" data-rem="time" data-id="${id}">Change time</button>` : '')
+      + (s === 'active' ? `<button type="button" class="small" data-rem="send" data-id="${id}">${icon('send', 'sm')}Send now</button>` : '')
+      + (open ? `<button type="button" class="small danger" data-rem="cancel" data-id="${id}">Cancel</button>` : '')
+      + `<button type="button" class="small ghost" data-rem="log" data-id="${id}">History</button></div></article>`;
+  }).join('') : emptyState('clock', 'No reminders yet', 'Add a dose, visit or diary reminder. Dose reminders set the dosing schedule.');
 }
 
 async function loadTab() {
   if (!state.pid) return;
-  $$('#dTabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === state.tab));
+  $$('#dTabs button').forEach(b => { const on = b.dataset.tab === state.tab; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
   const body = $('#dTabBody');
+  body.innerHTML = skeleton(3);
   if (state.tab === 'events') {
     const { events } = await api('GET', `/staff/participants/${state.pid}/events`);
-    body.innerHTML = table(events, ['record_type', 'status', 'occurred_at', 'source', 'dose_label', 'response', 'verbatim_text', 'summary']);
+    body.innerHTML = table(events, ['record_type', 'status', 'occurred_at', 'source', 'dose_label', 'response', 'verbatim_text', 'summary'], null,
+      emptyState('file', 'No clinical events yet', 'Visits, doses, symptoms and consent questions appear here as they are recorded.'));
   } else if (state.tab === 'adherence') {
     const a = await api('GET', `/staff/participants/${state.pid}/adherence`);
-    body.innerHTML = `<p>Last ${a.window_days} days: <b>${a.total}</b> dose reminders, taken rate <b>${a.taken_rate === null ? '-' : Math.round(a.taken_rate * 100) + '%'}</b></p>`
-      + table(Object.entries(a.counts).map(([response, n]) => ({ response, n })));
+    const rate = a.taken_rate === null ? '—' : Math.round(a.taken_rate * 100) + '%';
+    const tone = a.taken_rate === null ? '' : a.taken_rate >= 0.8 ? 'tone-ok' : a.taken_rate >= 0.6 ? 'tone-warn' : 'tone-bad';
+    body.innerHTML = `<div class="kpis"><div class="kpi"><span>Dose reminders, last ${a.window_days} days</span><b>${a.total}</b></div>
+      <div class="kpi ${tone}"><span>Taken rate</span><b>${rate}</b></div></div>`
+      + table(Object.entries(a.counts).map(([response, n]) => ({ response, n })), null, null,
+        emptyState('pill', 'No dose responses yet', 'Taken and skipped replies to dose reminders are counted here.'));
   } else {
     const { communications } = await api('GET', `/staff/participants/${state.pid}/communications`);
-    body.innerHTML = table(communications, ['created_at', 'channel', 'direction', 'msg_type', 'template_name', 'subject', 'body_text', 'delivery_status']);
+    body.innerHTML = table(communications, ['created_at', 'channel', 'direction', 'msg_type', 'template_name', 'subject', 'body_text', 'delivery_status'], null,
+      emptyState('message', 'No messages yet', 'WhatsApp, email and web chat messages with this participant appear here.'));
   }
 }
 
 async function reminderAction(action, id) {
   const r = state.reminders.find(x => x.reminder_id === id);
-  if (action === 'pause') await api('PATCH', `/staff/reminders/${id}`, { status: 'paused', reason: prompt('Reason (optional)') || undefined });
-  else if (action === 'resume') await api('PATCH', `/staff/reminders/${id}`, { status: 'active' });
+  if (action === 'pause') {
+    const reason = await ask({ title: `Pause "${r.label}"?`, message: 'The participant stops getting this reminder until you activate it again.',
+      input: { label: 'Reason', placeholder: 'e.g. Participant is traveling' }, confirm: 'Pause reminder' });
+    if (reason === null) return;
+    await api('PATCH', `/staff/reminders/${id}`, { status: 'paused', reason: reason || undefined });
+  } else if (action === 'resume') await api('PATCH', `/staff/reminders/${id}`, { status: 'active' });
   else if (action === 'time') {
-    const time = prompt('New time, HH:MM in the participant\'s time zone', '21:00'); if (!time) return;
-    await api('PATCH', `/staff/reminders/${id}`, { time, reason: prompt('Reason (optional)') || undefined });
+    const time = await ask({ title: `Change the time of "${r.label}"`, message: "Times are in the participant's time zone.",
+      input: { label: 'New time', type: 'time', value: '21:00', required: true, error: 'Choose a time.' }, confirm: 'Continue' });
+    if (!time) return;
+    const reason = await ask({ title: 'Reason for the change', input: { label: 'Reason', placeholder: 'e.g. Participant asked for 9 PM' }, confirm: 'Change time' });
+    if (reason === null) return;
+    await api('PATCH', `/staff/reminders/${id}`, { time, reason: reason || undefined });
   } else if (action === 'send') {
     const out = await api('POST', `/staff/reminders/${id}/send-now`);
-    toast(out.sent ? 'Sent. See Inspector > WhatsApp outbox.' : 'Not sent: ' + (out.reason || ''));
+    toast(out.sent ? 'Reminder sent on WhatsApp.' : 'Not sent: ' + (out.reason || 'no reason given'));
   } else if (action === 'cancel') {
-    if (!confirm(`Cancel "${r.label}"? The schedule is deleted; the row is kept.`)) return;
+    const ok = await ask({ title: `Cancel "${r.label}"?`, message: 'The schedule is deleted and the participant stops getting this reminder. The record is kept.',
+      confirm: 'Cancel reminder', cancel: 'Keep reminder', tone: 'danger-solid' });
+    if (!ok) return;
     await api('DELETE', `/staff/reminders/${id}`);
-  } else if (action === 'log') { alert(JSON.stringify(r.change_log, null, 2)); return; }
+  } else if (action === 'log') {
+    await ask({ title: `Change history: ${r.label}`, pre: JSON.stringify(r.change_log, null, 2), confirm: 'Close', cancel: '' });
+    return;
+  }
   showDetail(state.pid);
 }
 
 // ------------------------------------------------------------ wiring
 let qTimer; $('#q').oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(loadParticipants, 250); };
 $('#statusFilter').onchange = loadParticipants;
-$('#reqRefresh').onclick = loadStaffRequests;
+$('#reqRefresh').onclick = () => loadStaffRequests();
 document.addEventListener('click', e => {
   const pidEl = e.target.closest('[data-pid]');
-  if (pidEl) { e.preventDefault(); showDetail(pidEl.dataset.pid); }
+  if (pidEl) { e.preventDefault(); goParticipant(pidEl.dataset.pid); return; }
+  const go = e.target.closest('[data-goto-req]');
+  if (go) { state.openReq = go.dataset.gotoReq; location.hash = '#/requests'; loadStaffRequests(); return; }
   const close = e.target.closest('[data-close]'); if (close) $('#' + close.dataset.close).classList.add('hidden');
-  const q = e.target.closest('[data-quick]'); if (q) sendReply(q.dataset.quick, q.dataset.text).catch(() => {});
+  const q = e.target.closest('[data-quick]'); if (q) queueReply(q.dataset.quick, q.dataset.text, q.dataset.label);
+  const un = e.target.closest('[data-undo]'); if (un) undoReply(un.dataset.undo);
   const w = e.target.closest('[data-write]');
-  if (w) { state.openReq = state.openReq === w.dataset.write ? null : w.dataset.write; loadStaffRequests(); }
+  if (w) { state.openReq = state.openReq === w.dataset.write ? null : w.dataset.write; loadStaffRequests().then(() => $('.req.open textarea')?.focus()); }
   const snd = e.target.closest('[data-send]');
-  if (snd) { const t = snd.closest('.req').querySelector('textarea').value.trim(); if (!t) return toast('Write a reply first', true); sendReply(snd.dataset.send, t).catch(() => {}); }
-  const card = e.target.closest('.req');  // clicking the request itself opens the reply box too
+  if (snd) { const t = snd.closest('.req').querySelector('textarea').value.trim(); if (!t) return toast('Write a reply first, or use a quick reply.', true); queueReply(snd.dataset.send, t, 'your reply'); }
+  const card = e.target.closest('.req[data-req]');  // clicking the request itself opens the reply box too
   if (card && !e.target.closest('button, a, textarea') && state.openReq !== card.dataset.req) { state.openReq = card.dataset.req; loadStaffRequests(); }
   const rem = e.target.closest('[data-rem]'); if (rem) reminderAction(rem.dataset.rem, rem.dataset.id).catch(() => {});
 });
+$('#sheetClose').onclick = () => closeSheet();
+// "Open as page": the same participant at #/participants/<id>, inside the portal (sidebar and breadcrumbs stay).
+$('#sheetExpand').onclick = () => { const pid = state.pid; if (pid) location.hash = `#/participants/${encodeURIComponent(pid)}`; };
+sheet().addEventListener('close', () => {
+  if (state.page === 'participant') return;   // moving to the participant page, not leaving the participant
+  const was = state.pid; state.pid = null;
+  $$('#partList tr[aria-current]').forEach(r => r.removeAttribute('aria-current'));
+  if (was) $(`#partList [data-pid="${CSS.escape(was)}"]`)?.focus();
+});
+// Click anywhere on a participant row (except its copy button) to open the card.
+$('#partList').addEventListener('click', e => {
+  const row = e.target.closest('tr[data-row-pid]');
+  if (row && !e.target.closest('button, a')) showDetail(row.dataset.rowPid);
+});
 $('#dTabs').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) { state.tab = b.dataset.tab; loadTab(); } };
 
-$('#newPartBtn').onclick = () => $('#enrollPanel').classList.remove('hidden');
+$('#newPartBtn').onclick = () => {
+  state.pid = null; openSheet('enroll'); $('#enrollForm').full_name.focus();
+};
 $('#enrollForm').onsubmit = async e => {
   e.preventDefault();
   const { participant } = await api('POST', '/staff/participants', formData(e.target));
-  toast(`Enrolled ${participant.participant_id}; their participant-site login was created`);
-  $('#enrollPanel').classList.add('hidden');
+  toast(`Enrolled ${participant.full_name} (${participant.participant_id}). Their participant-site login was created.`);
   await loadParticipants(); showDetail(participant.participant_id);
 };
+$('#editBtn').onclick = () => setEditing(true);
+$('#profileForm').addEventListener('click', e => {
+  if (!e.target.closest('[data-cancel-edit]')) return;
+  $('#profileForm').reset(); setEditing(false); $('#editBtn').focus();
+});
 $('#profileForm').onsubmit = async e => {
   e.preventDefault();
   const changes = {};
@@ -326,16 +749,20 @@ $('#profileForm').onsubmit = async e => {
     const v = el.type === 'checkbox' ? el.checked : el.value;
     if (String(v) !== el.dataset.orig) changes[el.name] = v === '' ? null : v;
   }
-  if (!Object.keys(changes).length) return toast('Nothing changed');
+  if (!Object.keys(changes).length) return toast('No changes to save');
   if (e.target.change_reason.value) changes.change_reason = e.target.change_reason.value;
   await api('PATCH', `/staff/participants/${state.pid}`, changes);
-  toast('Saved'); loadParticipants(); showDetail(state.pid);
+  toast('Changes saved'); loadParticipants(); showDetail(state.pid);
 };
 $('#withdrawBtn').onclick = async () => {
-  const reason = prompt(`Withdraw ${state.pid}? This cancels reminders, disables their login and opts them out of WhatsApp. Records are kept.\n\nReason (required):`);
+  const name = $('#dTitle').textContent;
+  const reason = await ask({ title: `Withdraw ${name}?`,
+    message: 'This cancels their reminders, disables their participant-site login and stops WhatsApp messages. Their records are kept.',
+    input: { label: 'Reason', required: true, multiline: true, placeholder: 'e.g. Participant chose to leave the study at the 6-week visit', error: 'Enter a reason. It is kept in the audit trail.' },
+    confirm: 'Withdraw participant', tone: 'danger-solid' });
   if (!reason) return;
   const out = await api('DELETE', `/staff/participants/${state.pid}`, { reason });
-  toast(`Withdrawn; ${out.cancelled_reminders} reminder(s) cancelled`);
+  toast(`${name} withdrawn. ${out.cancelled_reminders} reminder${out.cancelled_reminders === 1 ? '' : 's'} cancelled.`);
   loadParticipants(); showDetail(state.pid);
 };
 
@@ -348,7 +775,7 @@ function syncRemForm() {
   $$('[data-one]', remForm).forEach(el => el.classList.toggle('hidden', !one));
 }
 remForm.reminder_type.onchange = remForm.kind.onchange = syncRemForm;
-$('#newRemBtn').onclick = () => { remForm.classList.remove('hidden'); syncRemForm(); };
+$('#newRemBtn').onclick = () => { remForm.classList.remove('hidden'); syncRemForm(); remForm.label.focus(); };
 remForm.onsubmit = async e => {
   e.preventDefault();
   const body = formData(remForm);
@@ -359,12 +786,13 @@ remForm.onsubmit = async e => {
     if (days.length) body.days = days;
   } else if (body.send_at) body.send_at = new Date(body.send_at).toISOString();
   await api('POST', `/staff/participants/${state.pid}/reminders`, body);
-  toast('Reminder saved; schedule created (see Inspector)');
+  toast('Reminder saved and scheduled');
   remForm.classList.add('hidden'); showDetail(state.pid);
 };
 
 wireWidgets();
-initPortal('staff', 'coordinators and PIs', onSignIn);
+route(false);
+initPortal('staff', onSignIn).then(() => route(false));
 </script>
 </body>
 </html>

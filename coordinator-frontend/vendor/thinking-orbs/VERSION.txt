@@ -1,0 +1,2 @@
+thinking-orbs 0.3.2 (MIT, Libraries.dev by Jakub Antalik), vendored from npm: dist/engine.es.js and its chunk only.
+The framework-free engine; ui/orb.js paints it on a canvas. No React.
