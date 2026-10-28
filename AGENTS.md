@@ -6,7 +6,7 @@ Guide for coding agents working in this repository. For what the project is and 
 
 TrialTalk: WhatsApp (AWS End User Messaging Social) -> SNS -> `tt-ingest` -> SQS FIFO -> `tt-router` -> Bedrock AgentCore agent (`agent/trial_agent`) -> reply; staff and participant portals (`coordinator-frontend`) -> API Gateway + Cognito -> Lambdas (`coordinator-backend/lambdas`) -> Aurora PostgreSQL via the RDS Data API with row-level security (`db/`); SES for alerts and escalations; OpenTelemetry spans stored in `trial.telemetry_spans` and shown on the staff Observability dashboard.
 
-The source of truth is what is deployed in AWS (account 180026596905, us-east-1, resources `tt-*`), not a CDK stack. The active branch is `trialtalk_ui`.
+The source of truth is what is deployed in AWS (account 180026596905, us-east-1, resources `tt-*`), not a CDK stack. The active branch is `main`.
 
 ## Components and their docs
 

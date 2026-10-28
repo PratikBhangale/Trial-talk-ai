@@ -10,7 +10,7 @@ Resources (all named tt-*):
 
 The code under coordinator-backend/lambdas is deployed unchanged. POST /staff/participants also creates the
 participant's website login in PARTICIPANT_POOL_ID, the pool the participant sign-in page uses (from the CDK stack
-TrialTalk-Portal, not created here). Not deployed yet: participant_api.
+TrialTalk-Portal, not created here). The participant API (participant_api) is not deployed by this script; it runs behind trialtalk-api from that CDK stack.
 Needs: pip install boto3 "botocore[crt]"
 """
 import argparse
@@ -31,7 +31,7 @@ POOL, CLIENT, API = "tt-staff", "tt-staff-web", "tt-portal-api"
 DOMAIN_PREFIX = f"tt-staff-{ACCOUNT}"
 CALLBACK_URLS = ["http://localhost:5173/"]
 CORS_ORIGINS = ["http://localhost:5173", "http://localhost:5174",
-                "https://trialtalk-ui.dqzri9vvxpyky.amplifyapp.com",   # Amplify branch trialtalk_ui
+                "https://trialtalk-ui.dqzri9vvxpyky.amplifyapp.com",   # old Amplify branch trialtalk_ui (deleted)
                 "https://main.dqzri9vvxpyky.amplifyapp.com"]   # Amplify branch main (coordinator-frontend)
 APPROVED_TEMPLATES = "dose_reminder_v2,visit_reminder_v1,daily_checkin_v1"
 # The first staff user (the build plan leaves this to the console). Everyone else is invited from /staff/accounts,
