@@ -33,9 +33,14 @@ Everything about where the pages run is in `CONFIG` at the top of `common.js`:
 
 ### What the hosted sign-in needs in AWS (backend work)
 
-1. **A staff account to sign in with.** `tt-staff` has one user (`FIRST_STAFF` in `coordinator-backend/infra/deploy_portal.py`). MFA in the pool is optional, so a password is enough; a first sign-in with the emailed temporary password asks for a new one. Temporary passwords expire after 3 days. After that an admin resets the user (`admin-reset-user-password`, or `admin-set-user-password` with `--permanent`).
-2. **CORS on `tt-portal-api`:** the Amplify URL is in `CORS_ORIGINS` in `coordinator-backend/infra/deploy_portal.py`. Run that script to apply it. Any other hosted origin needs adding there too.
-3. **Participants with a password.** The participant pool and `participant_api` are not deployed, and participants were designed to sign in with a WhatsApp one-time code (their password is random and unused). Password sign-in for them needs a real password set per participant, then the participant client ID and API URL in `CONFIG.clients.participant` and `CONFIG.apiBase.participant`.
+1. **A staff account to sign in with.** Staff sign in by email to `tt-staff` (`us-east-1_GlJQOeTBW`, account 180026596905). MFA in the pool is optional, so a password is enough; a first sign-in with an emailed temporary password asks for a new one. Temporary passwords expire after 3 days. After that an admin resets the user (`admin-reset-user-password`, or `admin-set-user-password` with `--permanent`).
+2. **CORS on `tt-portal-api`:** the Amplify URL is in `CORS_ORIGINS` in `coordinator-backend/infra/deploy_portal.py`, and was applied to the live API with the CLI on 2026-10-28. Any other hosted origin needs adding there too.
+3. **Participants with a password.** `CONFIG` points at the participant pool `trialtalk-participants` (`us-east-1_FVAiqMdUk`), its web client `60qtjo1628btf8aibe7o0808pe` and `trialtalk-api`, all from the CDK stack `TrialTalk-Portal` in account 180026596905. That pool was built for a WhatsApp one-time code (custom auth). Password sign-in needs the following, applied with the CLI on 2026-10-28:
+   - `ALLOW_USER_PASSWORD_AUTH` on the web client.
+   - Each participant user with a verified `phone_number` (the sign-in alias), `custom:participant_id` matching `pii.participants`, and a permanent password. The demo participant is user `P-0142`, phone `+1 732 555 0142`, password `TrialTalk-Demo-2026!`.
+   - The Amplify URL in `trialtalk-api`'s CORS origins (and `tt-portal-api`'s, item 2).
+
+   The client and CORS changes aren't in that stack's CDK source, so the next deploy of `TrialTalk-Portal` undoes them. Add them there.
 
 ## Where it meets the backend
 

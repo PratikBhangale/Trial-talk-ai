@@ -19,12 +19,15 @@ function store(k, v) {
 // Otherwise a hosted build (Amplify or any static host) talking to what is deployed in AWS.
 const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 const CONFIG = {
-  // Per portal. The participant API is not deployed yet.
+  // Per portal. Staff: tt-portal-api (coordinator-backend/infra/deploy_portal.py). Participants: trialtalk-api,
+  // from the CDK stack TrialTalk-Portal in account 180026596905.
   apiBase: LOCAL ? { staff: '/api', participant: '/api' }
-    : { staff: 'https://ca0jle1s2g.execute-api.us-east-1.amazonaws.com', participant: '' },
+    : { staff: 'https://ca0jle1s2g.execute-api.us-east-1.amazonaws.com',
+        participant: 'https://ajda6ret3j.execute-api.us-east-1.amazonaws.com' },
   cognitoRegion: 'us-east-1',
-  // Cognito app clients that allow USER_PASSWORD_AUTH. Staff (tt-staff) sign in by email; empty = not deployed.
-  clients: { staff: '6tfennq5nb6hu8i50u2cvh3mo1', participant: '' },
+  // Cognito app clients that allow USER_PASSWORD_AUTH. Staff: tt-staff-web in tt-staff, signing in by email.
+  // Participants: the web client of trialtalk-participants, signing in by phone number (an alias in that pool).
+  clients: { staff: '6tfennq5nb6hu8i50u2cvh3mo1', participant: '60qtjo1628btf8aibe7o0808pe' },
   // The default login the sign-in page fills in. The dev server always accepts it (Jamie Fox, PI at every site).
   // Hosted there is none: no Cognito user has these details. To add one, set it to a synthetic account's email and
   // password. Anyone can read it here, so it opens the portal to anyone: never use it once real data is reachable.
