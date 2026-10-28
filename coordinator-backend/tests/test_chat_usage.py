@@ -182,12 +182,39 @@ def test_seed_telemetry_shapes_and_is_marked_synthetic(pg, call_staff, aws, admi
     assert len(comms) >= len(invokes) * 0.9 and len({c[2].date() for c in comms}) >= 7
 
 
+def test_seed_always_has_recent_errors_including_an_agent_failure(pg, call_staff, aws, admin, clean_spans):
+    """The last 24 h hold >= 2 error traces (a root ERROR, so the Error-rate tile is clickable, and agent failures)."""
+    seeded(pg, admin, call_staff)
+    recent = "start_ts >= now() - interval '24 hours'"
+    assert admin.execute(f"SELECT count(*) FROM trial.telemetry_spans WHERE parent_id IS NULL AND status = 'ERROR' "
+                         f"AND {recent}").fetchone()[0] >= 1
+    assert admin.execute(f"SELECT count(DISTINCT trace_id) FROM trial.telemetry_spans WHERE status = 'ERROR' "
+                         f"AND {recent}").fetchone()[0] >= 2
+    failed = admin.execute(f"SELECT trace_id, attrs FROM trial.telemetry_spans WHERE name = 'agent.invoke' "
+                           f"AND status = 'ERROR' AND {recent}").fetchall()
+    assert failed
+    for _, attrs in failed:  # an agent failure: ERROR, no tokens, still synthetic
+        assert attrs["trialtalk.synthetic"] is True
+        assert "gen_ai.usage.input_tokens" not in attrs and "gen_ai.usage.output_tokens" not in attrs
+    for (tid, _) in failed:
+        names = dict(admin.execute("SELECT name, status FROM trial.telemetry_spans WHERE trace_id = %s", (tid,)))
+        assert names["whatsapp.route"] == "ERROR" and names["agent.call"] == "ERROR"
+    # Its reply row: no session, no tokens (the shape a failed WhatsApp agent call leaves behind)
+    rows = admin.execute("SELECT session_id, input_tokens, output_tokens FROM trial.communications "
+                         "WHERE body_text LIKE '[demo data]%' AND session_id IS NULL AND created_at >= now() - interval '24 hours'"
+                         ).fetchall()
+    assert rows and all(r == (None, None, None) for r in rows)
+
+
 def test_seed_telemetry_is_rerunnable(pg, call_staff, aws, admin, clean_spans):
     server = seeded(pg, admin, call_staff)
     server.seed_telemetry(days=7)
     n = admin.execute("SELECT count(DISTINCT trace_id) FROM trial.telemetry_spans").fetchone()[0]
     n_spans = admin.execute("SELECT count(*) FROM trial.telemetry_spans").fetchone()[0]
+    comms = admin.execute("SELECT count(*) FROM trial.communications WHERE body_text LIKE '[demo data]%'").fetchone()[0]
     server.seed_telemetry(days=7)
+    assert admin.execute("SELECT count(*) FROM trial.communications WHERE body_text LIKE '[demo data]%'").fetchone()[0] \
+        <= comms * 1.2
     # synthetic spans are replaced, not doubled
     assert admin.execute("SELECT count(*) FROM trial.telemetry_spans").fetchone()[0] <= n_spans * 1.2
     assert n > 50

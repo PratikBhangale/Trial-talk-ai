@@ -309,6 +309,67 @@ def _synth_traces(days: int, now: datetime, rng: random.Random) -> tuple[list[tu
         spans.append((span_id, tid, parent, name, service, kind, start, round(dur, 2), status,
                       json.dumps({**attrs, **SYNTH})))
 
+    def one_trace(t0, roll):
+        after = t0 >= change_at
+        tid, ingest, route = f"{rng.getrandbits(128):032x}", sid(), sid()
+        ing_ms = rng.uniform(15, 90)
+        if roll < 0.02:  # signature / payload rejected at ingest
+            add(tid, ingest, None, "whatsapp.ingest", "tt-ingest", "SERVER", t0, ing_ms, "ERROR",
+                {"messaging.system": "whatsapp", "http.response.status_code": 400})
+            return
+        add(tid, ingest, None, "whatsapp.ingest", "tt-ingest", "SERVER", t0, ing_ms, "OK",
+            {"messaging.system": "whatsapp", "http.response.status_code": 200})
+        t_route = t0 + timedelta(milliseconds=ing_ms + rng.uniform(40, 400))  # time on the queue
+        if roll < 0.10:  # Layer 0: STOP / START / button taps never reach the model
+            add(tid, route, ingest, "whatsapp.route", "tt-router", "CONSUMER", t_route, rng.uniform(40, 200),
+                "OK", {"trialtalk.msg_type": "button", "messaging.operation": "process"})
+            return
+
+        failed = roll < 0.14
+        call, invoke = sid(), sid()
+        if failed:
+            inv_ms = rng.choice([rng.uniform(300, 5000), 29000.0])
+        else:
+            inv_ms = min(max(rng.lognormvariate(7.7, 0.45), 900), 12000) * (1.15 if after else 1.0)
+        t_call = t_route + timedelta(milliseconds=rng.uniform(15, 60))
+        call_ms = inv_ms + rng.uniform(30, 120)
+        status = "ERROR" if failed else "OK"
+        add(tid, route, ingest, "whatsapp.route", "tt-router", "CONSUMER", t_route, call_ms + rng.uniform(60, 220),
+            status, {"trialtalk.msg_type": "text", "messaging.operation": "process"})
+        add(tid, call, route, "agent.call", "tt-router", "CLIENT", t_call, call_ms, status,
+            {"rpc.system": "aws-api", "rpc.service": "bedrock-agentcore"})
+        t_inv = t_call + timedelta(milliseconds=rng.uniform(10, 60))
+        tin = int(min(max(rng.gauss(650, 150), 300), 1100) * (1.25 if after else 1.0))
+        tout = int(min(max(rng.gauss(140, 45), 40), 300))
+        inv_attrs = {"gen_ai.request.model": SYNTH_MODEL,
+                     "trialtalk.config_hash": SYNTH_HASH_AFTER if after else SYNTH_HASH_BEFORE}
+        if not failed:
+            inv_attrs.update({"gen_ai.usage.input_tokens": tin, "gen_ai.usage.output_tokens": tout})
+        add(tid, invoke, call, "agent.invoke", "trial-agent", "SERVER", t_inv, inv_ms, status, inv_attrs)
+
+        tools = 0
+        if failed:  # the participant still got the "something went wrong" reply: no session, no tokens
+            msgs.append({"created_at": t_route + timedelta(milliseconds=min(call_ms, 30000)), "tin": None, "tout": None,
+                         "latency_ms": int(call_ms), "tools": 0, "session": None,
+                         "body": "[demo data] Sorry, something went wrong on my side. If this is urgent, please "
+                                 "contact your study site."})
+        else:
+            if rng.random() < (0.45 if after else 0.7):  # the knowledge base is searched less after the change
+                for k in range(rng.randint(1, 2)):
+                    add(tid, sid(), invoke, "tool.search_trial_docs", "trial-agent", "INTERNAL",
+                        t_inv + timedelta(milliseconds=80 + 400 * k), rng.uniform(60, 350), "OK",
+                        {"trialtalk.kb.results": rng.randint(1, 5),
+                         "trialtalk.kb.top_score": round(rng.uniform(0.3, 0.95), 3)})
+                    tools += 1
+            if rng.random() < 0.03:
+                add(tid, sid(), invoke, "tool.escalate_to_coordinator", "trial-agent", "INTERNAL",
+                    t_inv + timedelta(milliseconds=inv_ms * 0.8), rng.uniform(80, 250), "OK",
+                    {"trialtalk.escalation.severity": "urgent"})
+                tools += 1
+            body = (SYNTH_REPLY * 20)[:int(tout * rng.uniform(3.2, 4.4))]
+            msgs.append({"created_at": t_route + timedelta(milliseconds=call_ms), "tin": tin, "tout": tout,
+                         "latency_ms": int(call_ms), "tools": tools, "body": body, "session": f"synthetic-{tid[:12]}"})
+
     for d in range(days + 1):  # calendar days touching the last `days` x 24 h; the two end days are partial
         day0 = (now - timedelta(days=days - d)).replace(hour=0, minute=0, second=0, microsecond=0)
         for _ in range(rng.randint(35, 65)):
@@ -316,61 +377,12 @@ def _synth_traces(days: int, now: datetime, rng: random.Random) -> tuple[list[tu
             t0 = day0 + timedelta(hours=hour, minutes=rng.randint(0, 59), seconds=rng.random() * 60)
             if not now - timedelta(days=days) <= t0 <= now - timedelta(minutes=1):
                 continue
-            after = t0 >= change_at
-            tid, ingest, route = f"{rng.getrandbits(128):032x}", sid(), sid()
-            roll = rng.random()
-            ing_ms = rng.uniform(15, 90)
-            if roll < 0.02:  # signature / payload rejected at ingest
-                add(tid, ingest, None, "whatsapp.ingest", "tt-ingest", "SERVER", t0, ing_ms, "ERROR",
-                    {"messaging.system": "whatsapp", "http.response.status_code": 400})
-                continue
-            add(tid, ingest, None, "whatsapp.ingest", "tt-ingest", "SERVER", t0, ing_ms, "OK",
-                {"messaging.system": "whatsapp", "http.response.status_code": 200})
-            t_route = t0 + timedelta(milliseconds=ing_ms + rng.uniform(40, 400))  # time on the queue
-            if roll < 0.10:  # Layer 0: STOP / START / button taps never reach the model
-                add(tid, route, ingest, "whatsapp.route", "tt-router", "CONSUMER", t_route, rng.uniform(40, 200),
-                    "OK", {"trialtalk.msg_type": "button", "messaging.operation": "process"})
-                continue
+            one_trace(t0, rng.random())
+    # Whatever the dice gave, the last 24 h always hold failures, so the dashboard's error drill-down is demoable:
+    # one request rejected at ingest (a root ERROR) and two agent failures.
+    for hours_ago, roll in ((3, 0.0), (6, 0.12), (14, 0.12)):
+        one_trace(now - timedelta(hours=hours_ago, minutes=rng.randint(0, 40)), roll)
 
-            failed = roll < 0.14
-            call, invoke = sid(), sid()
-            if failed:
-                inv_ms = rng.choice([rng.uniform(300, 5000), 29000.0])
-            else:
-                inv_ms = min(max(rng.lognormvariate(7.7, 0.45), 900), 12000) * (1.15 if after else 1.0)
-            t_call = t_route + timedelta(milliseconds=rng.uniform(15, 60))
-            call_ms = inv_ms + rng.uniform(30, 120)
-            status = "ERROR" if failed else "OK"
-            add(tid, route, ingest, "whatsapp.route", "tt-router", "CONSUMER", t_route, call_ms + rng.uniform(60, 220),
-                status, {"trialtalk.msg_type": "text", "messaging.operation": "process"})
-            add(tid, call, route, "agent.call", "tt-router", "CLIENT", t_call, call_ms, status,
-                {"rpc.system": "aws-api", "rpc.service": "bedrock-agentcore"})
-            t_inv = t_call + timedelta(milliseconds=rng.uniform(10, 60))
-            tin = int(min(max(rng.gauss(650, 150), 300), 1100) * (1.25 if after else 1.0))
-            tout = int(min(max(rng.gauss(140, 45), 40), 300))
-            inv_attrs = {"gen_ai.request.model": SYNTH_MODEL,
-                         "trialtalk.config_hash": SYNTH_HASH_AFTER if after else SYNTH_HASH_BEFORE}
-            if not failed:
-                inv_attrs.update({"gen_ai.usage.input_tokens": tin, "gen_ai.usage.output_tokens": tout})
-            add(tid, invoke, call, "agent.invoke", "trial-agent", "SERVER", t_inv, inv_ms, status, inv_attrs)
-
-            tools = 0
-            if not failed:
-                if rng.random() < (0.45 if after else 0.7):  # the knowledge base is searched less after the change
-                    for k in range(rng.randint(1, 2)):
-                        add(tid, sid(), invoke, "tool.search_trial_docs", "trial-agent", "INTERNAL",
-                            t_inv + timedelta(milliseconds=80 + 400 * k), rng.uniform(60, 350), "OK",
-                            {"trialtalk.kb.results": rng.randint(1, 5),
-                             "trialtalk.kb.top_score": round(rng.uniform(0.3, 0.95), 3)})
-                        tools += 1
-                if rng.random() < 0.03:
-                    add(tid, sid(), invoke, "tool.escalate_to_coordinator", "trial-agent", "INTERNAL",
-                        t_inv + timedelta(milliseconds=inv_ms * 0.8), rng.uniform(80, 250), "OK",
-                        {"trialtalk.escalation.severity": "urgent"})
-                    tools += 1
-                body = (SYNTH_REPLY * 20)[:int(tout * rng.uniform(3.2, 4.4))]
-                msgs.append({"created_at": t_route + timedelta(milliseconds=call_ms), "tin": tin, "tout": tout,
-                             "latency_ms": int(call_ms), "tools": tools, "body": body, "session": f"synthetic-{tid[:12]}"})
     return spans, msgs
 
 
@@ -389,7 +401,7 @@ def seed_telemetry(days: int = 7) -> None:
         c.execute("""DELETE FROM trial.telemetry_spans WHERE attrs @> '{"trialtalk.synthetic": true}'""")
         with c.transaction():  # communications is append-only; local throwaway database only, as in wipe()
             c.execute("ALTER TABLE trial.communications DISABLE TRIGGER communications_no_delete")
-            c.execute("DELETE FROM trial.communications WHERE session_id LIKE 'synthetic-%%'")
+            c.execute("DELETE FROM trial.communications WHERE session_id LIKE 'synthetic-%%' OR body_text LIKE '[demo data]%%'")
             c.execute("ALTER TABLE trial.communications ENABLE TRIGGER communications_no_delete")
         with c.cursor() as cur:
             cur.executemany(
