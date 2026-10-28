@@ -304,31 +304,38 @@ def traces(event, staff: Staff):
 
 
 def _trace_participant(t: db.Tx, trace_id: str) -> str | None:
-    """The participant whose message was logged during this trace, or None when there is no confident match.
+    """The participant whose agent reply was logged during this trace, or None when there is no confident match.
 
     Spans carry no participant (no PHI in telemetry), so the link comes from trial.communications under the caller's
-    row-level security: rows created inside the trace's time window whose session_id names a participant (see
-    pid_from_session) that is the row's own participant_id. When the trace reports agent token usage, only rows with
-    exactly those token counts qualify (the agent's reply logs the same numbers). Exactly one participant must remain;
-    two or more (overlapping conversations) give None, never a guess.
+    row-level security. A candidate is an outbound row created inside the trace's time window whose session_id names
+    a participant (see pid_from_session) that is the row's own participant_id, from the trace's channel (a trace with
+    whatsapp.* spans only matches the router's trialtalk-wa sessions; any other only web sessions). Its token pair must
+    equal the trace's: the agent's usage when the trace reports it (agent.invoke, else agent.call, the traces list's
+    rule), and no tokens at all when it does not, since a failed or Layer 0 reply logs none while other people's
+    successful replies do. Exactly one participant must remain; none or several give None, never a guess.
     """
+    num = "CASE WHEN attrs->>'{k}' ~ '^[0-9]+$' THEN (attrs->>'{k}')::bigint END"
+    tin, tout = num.format(k="gen_ai.usage.input_tokens"), num.format(k="gen_ai.usage.output_tokens")
+    usage = (f"CASE WHEN count({tin}) FILTER (WHERE name = 'agent.invoke') "
+             f"        + count({tout}) FILTER (WHERE name = 'agent.invoke') > 0 "
+             "       THEN sum({x}) FILTER (WHERE name = 'agent.invoke') "
+             "       ELSE sum({x}) FILTER (WHERE name = 'agent.call') END")
     rows = t.query(
         "WITH w AS (SELECT min(start_ts) AS lo, max(start_ts + duration_ms * interval '1 millisecond') AS hi, "
-        "  sum(CASE WHEN attrs->>'gen_ai.usage.input_tokens' ~ '^[0-9]+$' "
-        "      THEN (attrs->>'gen_ai.usage.input_tokens')::bigint END) FILTER (WHERE name = 'agent.invoke') AS tin, "
-        "  sum(CASE WHEN attrs->>'gen_ai.usage.output_tokens' ~ '^[0-9]+$' "
-        "      THEN (attrs->>'gen_ai.usage.output_tokens')::bigint END) FILTER (WHERE name = 'agent.invoke') AS tout "
+        f"  {usage.format(x=tin)} AS tin, {usage.format(x=tout)} AS tout, "
+        "  bool_or(left(name, 9) = 'whatsapp.') AS whatsapp "
         "  FROM trial.telemetry_spans WHERE trace_id = :tid) "
-        "SELECT c.participant_id, c.session_id, c.input_tokens, c.output_tokens, w.tin, w.tout "
+        "SELECT c.participant_id, c.session_id, c.input_tokens, c.output_tokens, w.tin, w.tout, w.whatsapp "
         "FROM trial.communications c, w "
-        "WHERE c.session_id IS NOT NULL AND c.participant_id IS NOT NULL "
+        "WHERE c.direction = 'outbound' AND c.session_id IS NOT NULL AND c.participant_id IS NOT NULL "
         "AND c.created_at BETWEEN w.lo - :slack::int * interval '1 millisecond' "
         "                     AND w.hi + :slack::int * interval '1 millisecond' "
         "ORDER BY c.created_at LIMIT 50", tid=trace_id, slack=MATCH_SLACK_MS)
-    rows = [r for r in rows if pid_from_session(r["session_id"]) == r["participant_id"]]
-    rows = [r for r in rows if r["tin"] is None or r["tout"] is None
-            or (_int(r["input_tokens"]), _int(r["output_tokens"])) == (_int(r["tin"]), _int(r["tout"]))]
-    pids = {r["participant_id"] for r in rows}
+    pids = {r["participant_id"] for r in rows
+            if pid_from_session(r["session_id"]) == r["participant_id"]
+            and r["session_id"].startswith("trialtalk-wa-" if r["whatsapp"] else "web-")
+            # The whole pair, both ways: (None, None) only matches a reply that logged no tokens.
+            and (_int(r["input_tokens"]), _int(r["output_tokens"])) == (_int(r["tin"]), _int(r["tout"]))}
     return pids.pop() if len(pids) == 1 else None
 
 

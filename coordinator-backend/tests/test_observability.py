@@ -371,22 +371,29 @@ def _enroll(call_staff, name, phone, site="RIVERSIDE"):
     return body["participant"]["participant_id"]
 
 
-def _reply_row(admin, pid, session, at, tin=None, tout=None):
+def _reply_row(admin, pid, session, at, tin=None, tout=None, direction="outbound"):
     admin.execute("INSERT INTO trial.communications (participant_id, channel, direction, msg_type, body_text, "
                   "session_id, input_tokens, output_tokens, created_at) "
-                  "VALUES (%s, 'whatsapp', 'outbound', 'text', 'reply', %s, %s, %s, %s)",
-                  (pid, session, tin, tout, at))
+                  "VALUES (%s, 'whatsapp', %s, 'text', 'reply', %s, %s, %s, %s)",
+                  (pid, direction, session, tin, tout, at))
 
 
-def _agent_trace(admin, trace, ago_min, tin=120, tout=45, prefix="t"):
-    """A WhatsApp routing trace: a 6 s routing span with an agent.invoke inside it. Returns the root's start."""
+def _agent_trace(admin, trace, ago_min, tin=120, tout=45, prefix="t", root="whatsapp.route", status="OK", usage=None):
+    """A routing trace: a 6 s root span with an agent.invoke inside it. Returns the root's start. root=None stores only
+    the agent's own spans (the dev server's web chat); usage replaces the agent.invoke token attributes."""
     start = datetime.now(timezone.utc) - timedelta(minutes=ago_min)
-    admin.execute(INSERT_SPAN, (f"{prefix}-root", trace, None, "whatsapp.route", "router", "CONSUMER", start, 6000.0,
-                                "OK", "{}"))
-    admin.execute(INSERT_SPAN, (f"{prefix}-invoke", trace, f"{prefix}-root", "agent.invoke", "trial-agent", "SERVER",
-                                start + timedelta(milliseconds=200), 5000.0, "OK",
-                                json.dumps({"gen_ai.usage.input_tokens": tin, "gen_ai.usage.output_tokens": tout})))
+    if root:
+        admin.execute(INSERT_SPAN, (f"{prefix}-root", trace, None, root, "router", "CONSUMER", start, 6000.0, status,
+                                    "{}"))
+    attrs = usage if usage is not None else {"gen_ai.usage.input_tokens": tin, "gen_ai.usage.output_tokens": tout}
+    admin.execute(INSERT_SPAN, (f"{prefix}-invoke", trace, f"{prefix}-root" if root else "never-stored", "agent.invoke",
+                                "trial-agent", "SERVER", start + timedelta(milliseconds=200), 5000.0, status,
+                                json.dumps(attrs)))
     return start
+
+
+def _web_session(pid, at):
+    return f"web-{pid}-{at:%Y-%m-%d}"
 
 
 def _wa_session(pid, at):
@@ -399,7 +406,7 @@ def test_trace_participant_resolved_inside_window(call_staff, spans):
     start = _agent_trace(spans, linked, 10, prefix="l")
     _reply_row(spans, pid, _wa_session(pid, start), start + timedelta(seconds=5.5), 120, 45)
     # the participant's own inbound (no tokens) in the same window does not change the answer
-    _reply_row(spans, pid, _wa_session(pid, start), start + timedelta(seconds=0.1))
+    _reply_row(spans, pid, _wa_session(pid, start), start + timedelta(seconds=0.1), direction="inbound")
     status, body = call_staff("GET", f"/staff/observability/traces/{linked}")
     assert status == 200, body
     assert body["participant_id"] == pid and len(body["spans"]) == 2
@@ -425,12 +432,12 @@ def test_trace_participant_needs_matching_tokens_and_one_participant(call_staff,
     # two participants' replies inside one trace window with the same token counts: ambiguous, so no link
     start = _agent_trace(spans, both, 10, prefix="b")
     _reply_row(spans, maria, _wa_session(maria, start), start + timedelta(seconds=5), 120, 45)
-    _reply_row(spans, sam, f"web-{sam}-{start:%Y-%m-%d}", start + timedelta(seconds=5.2), 120, 45)
+    _reply_row(spans, sam, _wa_session(sam, start), start + timedelta(seconds=5.2), 120, 45)
     assert "participant_id" not in call_staff("GET", f"/staff/observability/traces/{both}")[1]
     # the trace's token counts pick the right reply when another participant's falls in the window too
     start = _agent_trace(spans, tokens, 30, tin=700, tout=90, prefix="t")
     _reply_row(spans, maria, _wa_session(maria, start), start + timedelta(seconds=5), 120, 45)
-    _reply_row(spans, sam, f"web-{sam}-{start:%Y-%m-%d}", start + timedelta(seconds=5.2), 700, 90)
+    _reply_row(spans, sam, _wa_session(sam, start), start + timedelta(seconds=5.2), 700, 90)
     assert call_staff("GET", f"/staff/observability/traces/{tokens}")[1]["participant_id"] == sam
 
 
@@ -444,3 +451,58 @@ def test_trace_participant_is_site_scoped(call_staff, spans):
     status, body = call_staff("GET", f"/staff/observability/traces/{trace}", claims=OTHER_SITE_CLAIMS)
     assert status == 200, body
     assert len(body["spans"]) == 2 and "participant_id" not in body   # spans are PHI-free; the link is not
+
+
+def test_failed_whatsapp_trace_never_links_a_bystander(call_staff, spans):
+    # Review finding: Maria's agent call fails (no tokens anywhere in the trace) and the router logs her fallback
+    # reply with session_id NULL; Sam's unrelated, successful reply lands inside the 30 s window. Must not be Sam.
+    maria = _enroll(call_staff, "Maria Lopez", "+17325550142")
+    sam = _enroll(call_staff, "Sam Okafor", "+17325550143")
+    tr = "ab" * 16
+    start = datetime.now(timezone.utc) - timedelta(minutes=5)
+    spans.execute(INSERT_SPAN, ("r", tr, None, "whatsapp.route", "router", "CONSUMER", start, 30000.0, "ERROR", "{}"))
+    spans.execute(INSERT_SPAN, ("i", tr, "r", "agent.invoke", "trial-agent", "SERVER",
+                                start + timedelta(milliseconds=200), 29000.0, "ERROR", "{}"))
+    _reply_row(spans, maria, None, start + timedelta(seconds=30))
+    _reply_row(spans, sam, _wa_session(sam, start), start + timedelta(seconds=12), 300, 60)
+    # Sam's inbound in the window (a session id, no tokens) is not a reply either
+    _reply_row(spans, sam, _wa_session(sam, start), start + timedelta(seconds=11), direction="inbound")
+    body = call_staff("GET", f"/staff/observability/traces/{tr}")[1]
+    assert body["spans"] and "participant_id" not in body
+
+
+def test_failed_web_trace_links_its_own_untokened_reply(call_staff, spans):
+    # A web chat whose agent call failed: the fallback reply carries the web session and no tokens, so it is the
+    # one candidate; a bystander's successful reply in the window (tokens) is not.
+    maria = _enroll(call_staff, "Maria Lopez", "+17325550142")
+    sam = _enroll(call_staff, "Sam Okafor", "+17325550143")
+    tr = "ac" * 16
+    start = _agent_trace(spans, tr, 5, root=None, status="ERROR", usage={})
+    _reply_row(spans, maria, _web_session(maria, start), start + timedelta(seconds=5.5))
+    _reply_row(spans, sam, _web_session(sam, start), start + timedelta(seconds=3), 300, 60)
+    assert call_staff("GET", f"/staff/observability/traces/{tr}")[1]["participant_id"] == maria
+
+
+def test_trace_participant_channel_and_token_pair_rules(call_staff, spans):
+    maria = _enroll(call_staff, "Maria Lopez", "+17325550142")
+    # A WhatsApp trace never matches a web session (and the reverse), even with equal tokens.
+    wa, web = "ad" * 16, "ae" * 16
+    start = _agent_trace(spans, wa, 10, prefix="w")
+    _reply_row(spans, maria, _web_session(maria, start), start + timedelta(seconds=5), 120, 45)
+    assert "participant_id" not in call_staff("GET", f"/staff/observability/traces/{wa}")[1]
+    start = _agent_trace(spans, web, 20, root=None, prefix="x")
+    _reply_row(spans, maria, _wa_session(maria, start), start + timedelta(seconds=4), 120, 45)
+    assert "participant_id" not in call_staff("GET", f"/staff/observability/traces/{web}")[1]
+    # Only an input count on the trace: the pair must still match, so a reply with an output count does not.
+    lone = "af" * 16
+    start = _agent_trace(spans, lone, 30, prefix="l", usage={"gen_ai.usage.input_tokens": 120})
+    _reply_row(spans, maria, _wa_session(maria, start), start + timedelta(seconds=5), 120, 45)
+    assert "participant_id" not in call_staff("GET", f"/staff/observability/traces/{lone}")[1]
+    # No agent.invoke tokens stored, but the router's agent.call has them: those are the trace's usage.
+    call = "b0" * 16
+    start = _agent_trace(spans, call, 40, prefix="c", usage={})
+    spans.execute(INSERT_SPAN, ("c-call", call, "c-root", "agent.call", "router", "CLIENT",
+                                start + timedelta(milliseconds=100), 5200.0, "OK",
+                                json.dumps({"gen_ai.usage.input_tokens": 500, "gen_ai.usage.output_tokens": 70})))
+    _reply_row(spans, maria, _wa_session(maria, start), start + timedelta(seconds=5.5), 500, 70)
+    assert call_staff("GET", f"/staff/observability/traces/{call}")[1]["participant_id"] == maria
