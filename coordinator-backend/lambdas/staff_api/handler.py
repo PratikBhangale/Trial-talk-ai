@@ -376,6 +376,36 @@ def participant_requests(event, staff: Staff):
     return 200, {"requests": rows, "unanswered": sum(not r["answered"] for r in rows)}
 
 
+@router.route("GET", "/staff/attention")
+def needs_attention(event, staff: Staff):
+    """What needs a person in the last 7 days, at the caller's sites: flagged symptoms, missed or skipped doses and
+    outbound messages that failed to deliver. Most urgent first (priority 1 to 3), newest first within each."""
+    require(staff, "events:read")
+    with db.tx(site_ids=staff.site_ids) as t:
+        rows = t.query(
+            "SELECT * FROM ("
+            "  SELECT 1 AS priority, 'Flagged symptom' AS item, e.participant_id, p.site_id,"
+            "         e.severity_hint AS detail, e.verbatim_text AS note, e.occurred_at AS happened_at"
+            "  FROM trial.current_events e JOIN pii.participants p USING (participant_id)"
+            "  WHERE e.record_type = 'SYMPTOM' AND e.flag_for_follow_up"
+            "    AND e.occurred_at > now() - interval '7 days'"
+            "  UNION ALL"
+            "  SELECT 2, 'Missed doses (7 days)', e.participant_id, p.site_id,"
+            "         count(*)::text || ' missed or skipped', string_agg(DISTINCT e.dose_label, ', '), max(e.scheduled_at)"
+            "  FROM trial.current_events e JOIN pii.participants p USING (participant_id)"
+            "  WHERE e.record_type = 'DOSE' AND e.response IN ('no_response', 'skipped')"
+            "    AND e.scheduled_at > now() - interval '7 days'"
+            "  GROUP BY e.participant_id, p.site_id"
+            "  UNION ALL"
+            "  SELECT 3, 'Message not delivered', c.participant_id, p.site_id,"
+            "         c.channel || ' ' || c.msg_type, coalesce(c.template_name, ''), c.created_at"
+            "  FROM trial.communications c LEFT JOIN pii.participants p USING (participant_id)"
+            "  WHERE c.direction = 'outbound' AND c.delivery_status = 'failed'"
+            "    AND c.created_at > now() - interval '7 days'"
+            ") q ORDER BY priority, happened_at DESC LIMIT 200")
+    return 200, {"items": rows}
+
+
 @router.route("POST", "/staff/requests/{cid}/reply")
 def reply_to_request(event, staff: Staff, cid: str):
     """Answer a participant request (a one-click quick reply or a longer message). The participant sees it

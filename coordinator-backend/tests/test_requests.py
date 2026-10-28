@@ -71,3 +71,14 @@ def test_other_participants_do_not_see_replies(call_staff, call_participant):
     cid = ask(call_participant, call_staff, a)
     call_staff("POST", f"/staff/requests/{cid}/reply", {"text": "private"})
     assert call_participant(b, "GET", "/me/requests")[1]["requests"] == []
+
+
+def test_attention_queue_shape_and_site_scope(call_staff):
+    status, out = call_staff("GET", "/staff/attention")
+    assert status == 200 and isinstance(out["items"], list)
+    for i in out["items"]:
+        assert {"priority", "item", "participant_id", "site_id", "detail", "note", "happened_at"} <= set(i)
+    priorities = [i["priority"] for i in out["items"]]
+    assert priorities == sorted(priorities)
+    # Another site's staff get a list too, scoped by row-level security to their own site.
+    assert call_staff("GET", "/staff/attention", claims=OTHER_SITE_CLAIMS)[0] == 200

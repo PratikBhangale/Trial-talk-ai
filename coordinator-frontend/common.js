@@ -464,7 +464,7 @@ function fmt(v) {
 
 // Column keys come straight from the API; people read headers.
 const ENUM_COLS = new Set(['record_type', 'source', 'response', 'channel', 'direction', 'msg_type', 'delivery_status', 'type', 'state']);
-const COL_LABELS = { record_type: 'Record', occurred_at: 'When', created_at: 'When', next_send_at: 'Next send', body_text: 'Message',
+const COL_LABELS = { record_type: 'Record', occurred_at: 'When', created_at: 'When', happened_at: 'When', item: 'What', participant_id: 'Participant', site_id: 'Site', next_send_at: 'Next send', body_text: 'Message',
   verbatim_text: 'In their words', msg_type: 'Type', template_name: 'Template', delivery_status: 'Delivery', dose_label: 'Dose', n: 'Count',
   'custom:participant_id': 'Participant ID', phone_number: 'Phone', phone_number_verified: 'Phone verified', reminder_id: 'Reminder ID', id: 'ID' };
 

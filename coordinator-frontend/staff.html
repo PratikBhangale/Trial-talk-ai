@@ -217,9 +217,13 @@
           <div class="page-head">
             <div>
               <div class="title"><h1 id="h-requests" tabindex="-1">Requests</h1><span id="reqBadge"></span></div>
-              <p>Questions participants send from their study page. Reply in one click, or write your own answer.</p>
+              <p>What needs a person: flagged symptoms, missed doses and messages that failed to send in the last 7 days, then questions from participants to answer.</p>
             </div>
             <div class="actions"><button id="reqRefresh" type="button"><span data-icon="refresh"></span>Refresh</button></div>
+          </div>
+          <div class="panel" id="attentionPanel">
+            <div class="panel-head"><h2>Needs attention</h2><span id="attnBadge"></span></div>
+            <div id="staffAttention"></div>
           </div>
           <div class="card-stack" id="staffRequests"></div>
         </section>
@@ -501,6 +505,22 @@ async function loadStaffRequests(quiet) {
       <span>${esc(kindLabel(kindOf(r)))} · “${esc(r.body_text)}”</span></div>
       <span class="list-side"><time datetime="${esc(r.created_at)}">${esc(when(r.created_at))}</time></span></li>`).join('')}</ul>`
     : emptyState('check', 'Nothing waiting', 'Every participant request has a reply.');
+  loadAttention(quiet).catch(() => {});
+}
+
+// Flagged symptoms, missed doses and failed messages (GET /staff/attention). Priority 1 is the most urgent.
+const ATTN_TONE = { 1: 'bad', 2: 'warn', 3: 'neutral' };
+async function loadAttention(quiet) {
+  let items;
+  try { ({ items } = await api('GET', '/staff/attention', undefined, { quiet: true })); }
+  catch { $('#attnBadge').innerHTML = ''; $('#staffAttention').innerHTML = emptyState('file', 'Unavailable', 'The needs-attention list could not be loaded. Refresh to try again.'); return; }
+  $('#attnBadge').innerHTML = items.length ? `<span class="pill tone-warn"><span class="dot"></span>${items.length} to review</span>` : chip('answered', 'Nothing to review');
+  renderStable($('#staffAttention'), items.length ? table(items.map(i => ({
+    item: { __html: `<span class="pill tone-${ATTN_TONE[i.priority] || 'neutral'}"><span class="dot"></span>${esc(i.item)}</span>` },
+    participant_id: { __html: `<a href="#/participants" data-pid="${esc(i.participant_id)}">${esc(i.participant_id)}</a>` },
+    site_id: i.site_id, detail: i.detail, note: i.note, happened_at: i.happened_at,
+  })), ['item', 'participant_id', 'site_id', 'detail', 'note', 'happened_at'])
+    : emptyState('check', 'Nothing needs attention', 'No flagged symptoms, missed doses or failed messages in the last 7 days.'));
 }
 
 function requestCard(r) {
