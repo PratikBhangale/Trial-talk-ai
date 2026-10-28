@@ -3,8 +3,6 @@
 import json
 from datetime import datetime, timezone
 
-import pytest
-
 INSERT = ("INSERT INTO trial.telemetry_spans (span_id, trace_id, parent_id, name, service, kind, start_ts, "
           "duration_ms, status, attrs) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)")
 
@@ -38,10 +36,21 @@ def test_defaults_apply(pg):
     assert (kind, status, attrs, parent) == ("INTERNAL", "UNSET", {}, None)
 
 
-def test_messaging_can_insert_but_not_select(pg):
-    import psycopg
+def test_messaging_insert_is_idempotent_on_conflict(pg):
+    """The exporter uses ON CONFLICT (span_id) DO NOTHING, which needs SELECT on the arbiter column."""
+    sql = INSERT + " ON CONFLICT (span_id) DO NOTHING"
+    args = ("s-msg-1", "t-3", None, "reminder", "reminder", "INTERNAL", datetime.now(timezone.utc), 3, "UNSET", "{}")
     with _connect(pg, "tt_messaging") as c:
-        c.execute(INSERT, ("s-msg-1", "t-3", None, "reminder", "reminder", "INTERNAL",
-                           datetime.now(timezone.utc), 3, "UNSET", "{}"))
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            c.execute("SELECT * FROM trial.telemetry_spans")
+        c.execute(sql, args)
+        c.execute(sql, args)
+        assert c.execute("SELECT count(*) FROM trial.telemetry_spans WHERE span_id = 's-msg-1'").fetchone()[0] == 1
+
+
+def test_participant_can_insert_span_with_conflict_clause(pg):
+    sql = INSERT + " ON CONFLICT (span_id) DO NOTHING"
+    args = ("s-part-1", "t-4", None, "POST /chat", "participant-api", "SERVER", datetime.now(timezone.utc), 5,
+            "OK", json.dumps({"http.route": "/chat"}))
+    with _connect(pg, "tt_participant") as c:
+        c.execute(sql, args)
+        c.execute(sql, args)
+        assert c.execute("SELECT count(*) FROM trial.telemetry_spans WHERE span_id = 's-part-1'").fetchone()[0] == 1

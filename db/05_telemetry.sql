@@ -28,7 +28,8 @@ CREATE INDEX telemetry_spans_start_idx ON trial.telemetry_spans (start_ts DESC);
 CREATE INDEX telemetry_spans_name_start_idx ON trial.telemetry_spans (name, start_ts DESC);
 
 ------------------------------------------------------------------------------
--- Grants. Services write spans; only the staff portal reads them back. No RLS (no PHI).
+-- Grants. Every service that emits spans needs INSERT and SELECT: the exporter writes with
+-- ON CONFLICT (span_id) DO NOTHING, and ON CONFLICT requires SELECT on the arbiter column.
+-- SELECT is harmless here because the table holds no PHI. No RLS.
 ------------------------------------------------------------------------------
-GRANT INSERT ON trial.telemetry_spans TO messaging_role, portal_role;
-GRANT SELECT ON trial.telemetry_spans TO portal_role;
+GRANT INSERT, SELECT ON trial.telemetry_spans TO messaging_role, portal_role, participant_role;

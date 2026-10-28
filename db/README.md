@@ -42,7 +42,7 @@ Which typed columns and `details` keys each `record_type` uses is in the build p
 
 ## Telemetry
 
-`trial.telemetry_spans` (from `05_telemetry.sql`) stores OpenTelemetry spans: ids, span name, service, start time, duration, status and a small `attrs` jsonb. It is separate from the four tables above and **carries no PHI by design**: no participant identifiers, no message text. The exporter in `lambdas/common/telemetry.py` keeps an attribute allowlist and drops everything else before writing, so never widen it with anything identifying. For that reason the table has no row-level security: `tt_messaging` and `tt_portal` can insert, only `tt_portal` can read.
+`trial.telemetry_spans` (from `05_telemetry.sql`) stores OpenTelemetry spans: ids, span name, service, start time, duration, status and a small `attrs` jsonb. It is separate from the four tables above and **carries no PHI by design**: no participant identifiers, no message text. The exporter in `lambdas/common/telemetry.py` keeps an attribute allowlist and drops everything else before writing, so never widen it with anything identifying. For that reason the table has no row-level security: `tt_messaging`, `tt_portal` and `tt_participant` get INSERT and SELECT (the exporter's `ON CONFLICT (span_id) DO NOTHING` needs SELECT).
 
 ## Rules every service must follow
 
