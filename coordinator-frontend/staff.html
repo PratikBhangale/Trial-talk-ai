@@ -75,10 +75,14 @@
 
         <!-- ============================================================ overview -->
         <section data-page="overview" class="overview" aria-labelledby="h-overview">
-          <div class="page-head">
+          <!-- The briefing: greeting, scope, and one computed sentence saying where things stand right now.
+               Everything below answers in order: anything wrong? (queue) · is the operation healthy? (KPIs) ·
+               what is the clinic's rhythm? (heatmap). Nothing here repeats another page's layout. -->
+          <div class="ov-hero">
             <div>
+              <p class="ov-date" id="ovDate">Your sites today</p>
               <h1 id="h-overview" tabindex="-1">Overview</h1>
-              <p id="ovScope">What needs attention at your sites today.</p>
+              <p class="ov-brief" id="ovBrief">Checking your sites…</p>
             </div>
             <div class="actions"><span class="live off" id="ovLive"><i></i>Connecting</span></div>
           </div>
@@ -90,18 +94,16 @@
             <a class="kpi" href="#/requests" id="kpiRequestsTile"><span>Requests waiting</span><b id="kpiRequests">–</b><small>From participants</small></a>
             <a class="kpi" href="#/usage"><span>Agent replies, 30 days</span><b id="kpiTokens">–</b><small id="kpiTokensSub">Sent by the study agent</small></a>
           </div>
-          <div class="panel section-gap" id="ovPfPanel" hidden>
-            <div class="panel-head"><h2>Trial portfolio</h2><span class="tag" id="ovPfTag"></span><div class="actions"><a href="#/clinic">All trials</a></div></div>
-            <div class="pf-rows" id="ovPortfolio"></div>
-          </div>
-          <div class="cols-2 even section-gap">
+          <div class="ov-main section-gap">
             <div class="panel">
-              <div class="panel-head"><h2>Active alerts</h2><div class="actions"><a href="#/alerts">View all alerts</a></div></div>
-              <div id="ovAlerts"></div>
+              <div class="panel-head"><h2>Action queue</h2><span class="tag" id="ovQueueTag"></span></div>
+              <p class="panel-note">Everything waiting on a person — emergencies, unanswered requests and the week's clinical signals — in one ranked list.</p>
+              <div class="q-rows" id="ovQueue"></div>
             </div>
             <div class="panel">
-              <div class="panel-head"><h2>Waiting requests</h2><div class="actions"><a href="#/requests">Open requests</a></div></div>
-              <div id="ovRequests"></div>
+              <div class="panel-head"><h2>Clinic rhythm</h2><span class="tag">Last 7 days</span></div>
+              <p class="panel-note">When participants talk to the study: messages and jobs handled per hour. Counts only, never content.</p>
+              <div id="ovRhythm"></div>
             </div>
           </div>
           <div class="cols-2 even section-gap">
@@ -115,12 +117,6 @@
               <p class="panel-note">Signals that someone could drop out. Each one says where it came from; none is a diagnosis.</p>
               <div id="ovRisk"></div>
             </div>
-          </div>
-          <div class="panel section-gap" id="ovOpsPanel" hidden>
-            <div class="panel-head"><h2>Operations</h2><span class="tag">Last 24 h</span><div class="actions"><a href="#/observability">Open observability</a></div></div>
-            <p class="panel-note">How the WhatsApp pipeline and the study agent are running right now. Aggregates and timings only, no message content.</p>
-            <div id="ovOpsKpis"></div>
-            <div id="ovOpsChart" class="ov-ops-chart"></div>
           </div>
         </section>
 
@@ -474,7 +470,8 @@ async function onSignIn(user) {
   const sites = new Intl.ListFormat(undefined, { type: 'conjunction' }).format(me.site_ids.map(s => humanize(s.toLowerCase())));
   const hour = new Date().getHours(), greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const first = String(name || '').trim().split(/\s+/)[0];
-  $('#ovScope').textContent = `${greet}${first ? `, ${first}` : ''} · ${today} · ${sites} · Study ${me.study_ids.join(', ') || 'any'}`;
+  $('#h-overview').textContent = `${greet}${first ? `, ${first}` : ''}`;
+  $('#ovDate').textContent = `${today} · ${sites} · Study ${me.study_ids.join(', ') || 'any'}`;
   $('#whoami').textContent = `Enroll participants at ${sites}, update their details and set dose and visit reminders.`;
   $('#enrollSite').innerHTML = me.site_ids.map(s => `<option>${esc(s)}</option>`).join('');
   $('#partList').innerHTML = skeleton(4);
@@ -487,14 +484,22 @@ async function onSignIn(user) {
 
 // ------------------------------------------------------------ overview
 async function loadOverview() {
-  loadOvOps();   // fire and forget: the Operations panel fills in when the telemetry summary arrives
+  loadRhythm();   // fire and forget: the heatmap fills in when the telemetry series arrives
+  ovPulse();      // render the queue and briefing from whatever the pollers have already stashed
   const [{ participants }, usage, { requests }, clinic] = await Promise.all([
     api('GET', '/staff/participants', undefined, { quiet: true }),
     api('GET', '/staff/usage?days=30', undefined, { quiet: true }),
     api('GET', '/staff/requests', undefined, { quiet: true }),
     api('GET', '/staff/clinic', undefined, { quiet: true }).catch(() => null),
   ]).catch(() => [{ participants: [] }, null, { requests: [] }, null]);
-  renderPortfolio(clinic);
+  if (clinic) {
+    const s = clinic.summary || {}, trials = clinic.trials || [];
+    trials.forEach(t => { Widgets.trials[t.study_id] = t.name; });
+    $('#kpiTrials').textContent = nf(s.trials ?? trials.length);
+    const engaged = s.patients ? Math.max(0, Math.min(100, 100 - (+s.pct_not_engaging || 0))) : null;
+    $('#kpiEngaged').textContent = engaged === null ? '—' : pctText(engaged);
+    $('#kpiEngagedTile').classList.toggle('tone-warn', engaged !== null && engaged < 75);
+  }
   renderSites(participants);
   renderRisk(participants, requests);
   const enrolled = participants.filter(p => p.status === 'enrolled').length;
@@ -508,69 +513,99 @@ async function loadOverview() {
   }
 }
 
-// Trial portfolio: one row per trial from GET /staff/clinic, the same numbers as the Clinical trials page.
-// The panel stays hidden when the clinic endpoint is unavailable, so the rest of the overview still works.
-function renderPortfolio(clinic) {
-  const panel = $('#ovPfPanel');
-  if (!clinic) { panel.hidden = true; return; }
-  const s = clinic.summary || {}, trials = clinic.trials || [];
-  trials.forEach(t => { Widgets.trials[t.study_id] = t.name; });
-  $('#kpiTrials').textContent = nf(s.trials ?? trials.length);
-  const engaged = s.patients ? Math.max(0, Math.min(100, 100 - (+s.pct_not_engaging || 0))) : null;
-  $('#kpiEngaged').textContent = engaged === null ? '—' : pctText(engaged);
-  $('#kpiEngagedTile').classList.toggle('tone-warn', engaged !== null && engaged < 75);
-  $('#ovPfTag').textContent = trials.length ? `${plural(trials.length, 'trial')} · ${plural(s.patients || 0, 'patient')}` : '';
-  panel.hidden = false;
-  $('#ovPortfolio').innerHTML = trials.length ? trials.map(pfRow).join('')
-    : emptyState('buildings', 'No trials yet', 'A trial appears here once one of its patients is enrolled at your sites.');
-}
-
-function pfRow(t) {
-  const id = esc(t.study_id);
-  return `<a class="pf-row" href="#/clinic/${esc(encodeURIComponent(t.study_id))}">
-    <div class="pf-name"><b>${esc(t.name)}</b>
-      <span class="tag-list">${t.phase ? `<span class="tag">${esc(t.phase)}</span>` : ''}<span class="tag">${id}</span>${t.condition ? `<span class="pf-cond">${esc(t.condition)}</span>` : ''}</span></div>
-    <dl class="pf-stats">
-      <div><dt>Patients</dt><dd>${nf(t.patients)}</dd></div>
-      <div title="Messaged the study via WhatsApp in the last 14 days"><dt>Engaged</dt><dd>${t.patients ? pctText(t.engaged_pct) : '—'}</dd></div>
-      <div title="${t.adherence_pct === null ? 'No doses due in the last 14 days' : 'Doses taken of doses due, last 14 days'}"><dt>Adherence</dt><dd>${pctText(t.adherence_pct)}</dd></div>
-      <div title="Emergency alerts raised in this trial, all time"><dt>Alerts</dt><dd class="${+t.critical ? 'is-bad' : ''}">${nf(t.critical)}</dd></div>
-    </dl>
-    <span class="go-cell" aria-hidden="true">${icon('chevron', 'sm')}</span>
-  </a>`;
-}
-
-// Operations: the observability summary and request chart, once per minute at most (it is the heaviest query set).
-// Loaded after the page renders and hidden when unavailable: the overview never waits on telemetry.
-async function loadOvOps() {
-  if (!TT.user) return;
-  if (Widgets.ovObs && Date.now() - Widgets.ovObsAt < 60000) return renderOvOps(Widgets.ovObs);
-  let o;
-  try { o = await api('GET', '/staff/observability?hours=24', undefined, { quiet: true }); }
-  catch { $('#ovOpsPanel').hidden = true; return; }
-  Widgets.ovObs = o; Widgets.ovObsAt = Date.now();
-  renderOvOps(o);
-}
-
-function renderOvOps(o) {
+// The briefing and the action queue are rebuilt whenever any poller lands new data (alerts every 4 s, requests
+// every 15 s, the attention list with them). Each poller stashes its rows and calls ovPulse(); nothing re-fetches.
+function ovPulse() {
   if (state.page !== 'overview') return;
-  const s = o.summary, rate = (+s.error_rate || 0) * 100;
-  $('#ovOpsPanel').hidden = false;
-  $('#ovOpsKpis').innerHTML = `<div class="kpis obs-trace-kpis">
-    <div class="kpi"><span>Requests</span><b>${nf(s.requests)}</b><small>${nf(s.traces)} traces</small></div>
-    <div class="kpi ${rate >= 5 ? 'tone-bad' : rate >= 1 ? 'tone-warn' : ''}"><span>Error rate</span><b>${s.requests ? rate.toFixed(1) + '%' : '—'}</b><small>${nf(s.errors)} failed</small></div>
-    <div class="kpi"><span>p95 latency</span><b>${esc(dur(s.p95_ms))}</b><small>Median ${esc(dur(s.p50_ms))}</small></div>
-    <div class="kpi"><span>Tokens</span><b>${esc(compactN((+s.tokens_in || 0) + (+s.tokens_out || 0)))}</b><small>Est. ${esc(usd(s.est_cost_usd))}</small></div>
-  </div>`;
-  const rq = o.series.requests, rqX = rq.map(b => Date.parse(b.t));
-  const rqTotal = rq.reduce((n, b) => n + b.count, 0), rqErr = rq.reduce((n, b) => n + b.errors, 0);
-  obsChart($('#ovOpsChart'), 'bars', {
-    x: rqX, step: 900000, stacked: true, integer: true, yLabel: 'Requests per 15 min',
-    label: `Requests per 15 minutes over the last 24 hours: ${rqTotal} requests, ${rqErr} errors.`,
-    series: [{ name: 'Succeeded', color: '--ch-1', values: rq.map(b => b.count - b.errors) },
-      { name: 'Errors', color: '--bad-solid', values: rq.map(b => b.errors) }],
-    xFormat: t => hourFmt.format(t), tipFormat: t => `${stampFmt.format(t)} – ${timeFmt.format(t + 900000)}`,
-  }, rqTotal ? '' : emptyState('activity', 'No requests in the last 24 hours', 'Each WhatsApp message, chat reply and scheduled job shows up here as it is processed.'));
+  renderBrief(); renderQueue();
+}
+
+// One plain sentence saying where things stand, built from the same stashes as the queue. Parts that have not
+// loaded yet are simply left out, so the sentence is always true.
+function renderBrief() {
+  const open = Widgets.qAlerts ? Widgets.open : null, waiting = state.unanswered, attn = Widgets.qAttn, risky = state.ovRisky;
+  if (open == null && waiting == null && !attn) return;   // nothing has landed yet
+  const parts = [];
+  if (open) parts.push(`<b>${plural(open, 'emergency alert')}</b> ${open === 1 ? 'is' : 'are'} waiting for a person`);
+  if (waiting) parts.push(`${plural(waiting, 'participant request')} ${waiting === 1 ? 'is' : 'are'} unanswered`);
+  if (attn?.length) parts.push(`${plural(attn.length, 'clinical signal')} from the last 7 days ${attn.length === 1 ? 'needs' : 'need'} review`);
+  if (risky) parts.push(`${plural(risky, 'participant')} may need a check-in`);
+  const list = new Intl.ListFormat(undefined, { type: 'conjunction' });
+  $('#ovBrief').innerHTML = parts.length ? `${list.format(parts)}.`
+    : 'All clear — no open alerts, every request answered and nothing flagged this week.';
+  $('#ovBrief').classList.toggle('is-clear', !parts.length);
+}
+
+// The action queue: open alerts, unanswered requests and the needs-attention signals, merged and ranked.
+// Each source page keeps its own full view; this is the cross-page triage order, most urgent first.
+const Q_SEV = { life_threatening: 0, urgent: 1, concern: 2 };
+function queueRows() {
+  const rows = [];
+  for (const a of Widgets.qAlerts || []) rows.push({
+    rank: (Q_SEV[a.severity] ?? 2) + (a.status === 'acknowledged' ? 3 : 0), t: a.created_at, href: '#/alerts',
+    tone: a.status === 'open' ? 'bad' : 'warn', ic: 'siren',
+    title: `Emergency alert · ${SEV_LABEL[a.severity] || humanize(a.severity)}`,
+    who: a.full_name, note: a.status === 'open' ? 'Nobody has responded' : `With ${staffName(a.acknowledged_by)}`,
+  });
+  for (const i of Widgets.qAttn || []) rows.push({
+    rank: 5 + i.priority, t: i.happened_at, tone: i.priority === 1 ? 'warn' : 'neutral',
+    ic: { 1: 'first-aid', 2: 'pill', 3: 'message' }[i.priority] || 'file',
+    title: i.item, who: i.participant_id, pid: i.participant_id, href: '#/participants',
+    note: [i.detail, i.note].filter(Boolean).join(' · '),
+  });
+  for (const r of (state.requests || []).filter(r => !r.answered)) rows.push({
+    rank: 7, t: r.created_at, href: '#/requests', tone: 'info', ic: 'inbox',
+    title: `Request · ${kindLabel(kindOf(r))}`, who: r.full_name, note: r.body_text,
+  });
+  return rows.sort((a, b) => a.rank - b.rank || parseTs(b.t) - parseTs(a.t));
+}
+
+function renderQueue() {
+  const rows = queueRows(), shown = rows.slice(0, 8);
+  $('#ovQueueTag').textContent = rows.length ? `${rows.length} waiting` : '';
+  renderStable($('#ovQueue'), shown.length ? shown.map(q => `
+    <a class="q-row" href="${esc(q.href)}" ${q.pid ? `data-pid="${esc(q.pid)}"` : ''}>
+      <span class="q-ic tone-${q.tone}">${icon(q.ic)}</span>
+      <span class="q-main"><b>${esc(q.title)}</b><span>${esc(q.who)}${q.note ? ` · ${esc(q.note)}` : ''}</span></span>
+      <span class="q-side"><time datetime="${esc(q.t)}">${esc(ago(q.t))}</time>${icon('chevron', 'sm')}</span>
+    </a>`).join('') + (rows.length > shown.length ? `<div class="q-more">${rows.length - shown.length} more on their own pages</div>` : '')
+    : emptyState('check', 'All clear', 'No open alerts, no waiting requests and no clinical signals to review.'));
+}
+
+// Clinic rhythm: messages and jobs handled per hour over the last 7 days, as a day-by-hour heatmap.
+// Built from the telemetry request series (counts only), cached 5 minutes: it is the heaviest query here.
+async function loadRhythm() {
+  if (!TT.user) return;
+  if (Widgets.rhythm && Date.now() - Widgets.rhythmAt < 300000) return renderRhythm(Widgets.rhythm);
+  let o;
+  try { o = await api('GET', '/staff/observability?hours=168', undefined, { quiet: true }); }
+  catch { $('#ovRhythm').innerHTML = emptyState('activity', 'No telemetry yet', 'The rhythm fills in once the pipeline has handled traffic.'); return; }
+  Widgets.rhythm = o; Widgets.rhythmAt = Date.now();
+  renderRhythm(o);
+}
+
+function renderRhythm(o) {
+  if (state.page !== 'overview') return;
+  const day0 = new Date(); day0.setHours(0, 0, 0, 0);
+  const days = Array.from({ length: 7 }, (_, i) => new Date(day0 - (6 - i) * 86400000));
+  const grid = days.map(() => Array(24).fill(0));
+  for (const b of o.series.requests) {
+    const d = new Date(Date.parse(b.t)), di = Math.round((new Date(d).setHours(0, 0, 0, 0) - days[0]) / 86400000);
+    if (b.count && grid[di]) grid[di][d.getHours()] += b.count;
+  }
+  const max = Math.max(...grid.flat());
+  if (!max) { $('#ovRhythm').innerHTML = emptyState('activity', 'Quiet week', 'No WhatsApp messages, chat replies or scheduled jobs handled in the last 7 days.'); return; }
+  let busy = { n: -1 };
+  grid.forEach((row, di) => row.forEach((n, h) => { if (n > busy.n) busy = { n, di, h }; }));
+  const wd = new Intl.DateTimeFormat(undefined, { weekday: 'short' }), hr = h => hourFmt.format(new Date(2000, 0, 1, h));
+  const cell = (n, di, h) => `<i class="rh-c" style="--v:${max ? (n / max).toFixed(3) : 0}" title="${esc(wd.format(days[di]))} ${esc(hr(h))} – ${esc(hr((h + 1) % 24))} · ${plural(n, 'request')}"></i>`;
+  $('#ovRhythm').innerHTML = `
+    <div class="rhythm" role="img" aria-label="Requests handled per hour over the last 7 days. Busiest: ${esc(wd.format(days[busy.di]))} ${esc(hr(busy.h))}, ${plural(busy.n, 'request')}.">
+      ${grid.map((row, di) => `<span class="rh-day">${di === 6 ? 'Today' : esc(wd.format(days[di]))}</span>${row.map((n, h) => cell(n, di, h)).join('')}`).join('')}
+      <span></span>${[0, 6, 12, 18].map(h => `<span class="rh-tick" style="grid-column:${h + 2} / span 6">${esc(hr(h))}</span>`).join('')}
+    </div>
+    <div class="rh-foot"><span>Busiest: <b>${esc(new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(days[busy.di]))} ${esc(hr(busy.h))}</b> · ${plural(busy.n, 'request')}</span>
+      <span class="rh-scale">Less ${[0.08, 0.3, 0.6, 1].map(v => `<i class="rh-c" style="--v:${v}"></i>`).join('')} More</span></div>`;
 }
 
 // Enrollment by site: every site the signed-in person covers, including ones with no participants at all.
@@ -607,6 +642,7 @@ async function renderRisk(participants, requests) {
       why.push(['warn', `Took ${Math.round(a.taken_rate * 100)}% of doses`, `${a.total} replies, 30 days`]);
     return { p, why };
   }).filter(x => x.why.length).sort((x, y) => y.why.length - x.why.length);
+  state.ovRisky = flagged.length; renderBrief();
   $('#ovRisk').innerHTML = flagged.length ? `<div class="risk-rows">${flagged.map(({ p, why }) => `
     <div class="risk-row"><div class="risk-who"><a href="#/participants" data-pid="${esc(p.participant_id)}">${esc(p.full_name)}</a>
       <span class="tag">${esc(p.participant_id)}</span></div>
@@ -699,12 +735,7 @@ async function loadStaffRequests(quiet) {
   setCount('#navRequests', unanswered, 'warn');
   renderStable($('#staffRequests'), requests.length ? requests.map(requestCard).join('')
     : emptyState('inbox', 'No requests yet', 'When a participant asks the study team something on the participant site, it shows up here.'));
-  const waiting = requests.filter(r => !r.answered).slice(0, 4);
-  $('#ovRequests').innerHTML = waiting.length ? `<ul class="list">${waiting.map(r => `
-    <li class="req-row" data-goto-req="${esc(r.comm_id)}"><div class="list-main"><b><a href="#/requests">${esc(r.full_name)}</a></b>
-      <span>${esc(kindLabel(kindOf(r)))} · “${esc(r.body_text)}”</span></div>
-      <span class="list-side"><time datetime="${esc(r.created_at)}">${esc(when(r.created_at))}</time></span></li>`).join('')}</ul>`
-    : emptyState('check', 'Nothing waiting', 'Every participant request has a reply.');
+  ovPulse();
   loadAttention(quiet).catch(() => {});
 }
 
@@ -714,6 +745,7 @@ async function loadAttention(quiet) {
   let items;
   try { ({ items } = await api('GET', '/staff/attention', undefined, { quiet: true })); }
   catch { $('#attnBadge').innerHTML = ''; $('#staffAttention').innerHTML = emptyState('file', 'Unavailable', 'The needs-attention list could not be loaded. Refresh to try again.'); return; }
+  Widgets.qAttn = items; ovPulse();
   $('#attnBadge').innerHTML = items.length ? `<span class="pill tone-warn"><span class="dot"></span>${items.length} to review</span>` : chip('answered', 'Nothing to review');
   renderStable($('#staffAttention'), items.length ? table(items.map(i => ({
     item: { __html: `<span class="pill tone-${ATTN_TONE[i.priority] || 'neutral'}"><span class="dot"></span>${esc(i.item)}</span>` },

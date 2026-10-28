@@ -641,43 +641,57 @@ button.kpi:focus-visible { outline-offset: -2px; border-radius: 0; }
 .engage-bar { height: 12px; }
 .engage .note { margin-top: 0; }
 
-/* ---------------------------------------------------------------- overview: trial portfolio and operations
-   Six headline tiles and four operations tiles: column counts that divide them exactly (6/3/2 and 4/2), so the
+/* ---------------------------------------------------------------- overview: the daily briefing
+   The hero carries the greeting and one computed sentence; a soft accent wash marks it as the page's voice,
+   not another data panel. Six headline tiles below it: column counts that divide 6 exactly (6/3/2), so the
    band never shows an empty cell. */
+.ov-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: var(--s-section);
+  padding: var(--s-panel); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-sm);
+  background: radial-gradient(130% 200% at 100% 0%, var(--accent-soft), transparent 52%) var(--surface); }
+.ov-date { font-size: var(--fs-meta); color: var(--text-2); margin-bottom: 6px; }
+.ov-hero h1 { font-size: 28px; }
+.ov-brief { margin-top: 10px; max-width: 70ch; font-size: 15px; color: var(--text-2); text-wrap: pretty; }
+.ov-brief b { color: var(--text); font-weight: var(--fw-strong); }
+.ov-brief.is-clear { color: var(--ok); }
+.ov-hero .live { margin-top: 4px; }
 .overview > .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-#ovOpsKpis .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @container main (max-width: 1100px) { .overview > .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@container main (max-width: 640px) {
-  .overview > .kpis, #ovOpsKpis .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+@container main (max-width: 640px) { .overview > .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
-/* ---------------------------------------------------------------- overview: trial portfolio and operations
-   The portfolio is the clinic's trial cards as dense rows: a row per trial, the same four figures, the whole row a
-   link to the trial. Rows bleed to the panel edges so the hover tint reads as one line, like a table row. */
-.pf-rows { display: grid; margin: -4px calc(-1 * var(--s-panel)) calc(-1 * var(--s-panel)); }
-.pf-row { display: grid; grid-template-columns: minmax(200px, 1fr) auto 20px; gap: 8px 24px; align-items: center;
-  padding: 14px var(--s-panel); border-top: 1px solid var(--border); color: var(--text); text-decoration: none;
-  transition-property: background-color; transition-duration: var(--dur-fast); }
-.pf-row:hover { background: var(--surface-2); color: var(--text); }
-.pf-row:focus-visible { outline-offset: -2px; }
-.pf-row:last-child { border-radius: 0 0 var(--r-lg) var(--r-lg); }
-.pf-name { display: grid; gap: 6px; min-width: 0; }
-.pf-name b { font-size: var(--fs-body); line-height: 1.4; overflow-wrap: anywhere; }
-.pf-cond { font-size: var(--fs-xs); color: var(--text-2); align-self: center; }
-.pf-stats { display: grid; grid-template-columns: repeat(4, minmax(72px, auto)); gap: 24px; margin: 0; }
-.pf-stats div { display: grid; gap: 2px; min-width: 0; text-align: end; }
-.pf-stats dt { font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; }
-.pf-stats dd { margin: 0; font-size: var(--fs-h2); font-weight: var(--fw-strong); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-.pf-stats dd.is-bad { color: var(--bad); }
-.pf-row .go-cell { display: inline-flex; width: auto; }
-.pf-rows > .empty { margin: 4px var(--s-panel) var(--s-panel); }
-@container main (max-width: 760px) {
-  .pf-row { grid-template-columns: minmax(0, 1fr) 20px; }
-  .pf-row .go-cell { grid-row: 1; grid-column: 2; }
-  .pf-stats { grid-column: 1 / -1; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .pf-stats div { text-align: start; }
-}
-.ov-ops-chart { margin-top: 20px; }
+/* The action queue (left) and the clinic rhythm heatmap (right). The queue is the page's work surface, so it
+   takes the wider column; both collapse to one column where the trial pages do. */
+.ov-main { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: var(--s-section); align-items: start; }
+@container main (max-width: 980px) { .ov-main { grid-template-columns: minmax(0, 1fr); } }
+.q-rows { display: grid; margin: -4px calc(-1 * var(--s-panel)) calc(-1 * var(--s-panel)); }
+.q-rows > .empty { margin: 4px var(--s-panel) var(--s-panel); }
+.q-row { display: flex; align-items: center; gap: 14px; padding: 12px var(--s-panel); border-top: 1px solid var(--border);
+  color: var(--text); text-decoration: none; transition-property: background-color; transition-duration: var(--dur-fast); }
+.q-row:hover { background: var(--surface-2); color: var(--text); }
+.q-row:focus-visible { outline-offset: -2px; }
+.q-row:last-child { border-radius: 0 0 var(--r-lg) var(--r-lg); }
+.q-ic { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 10px;
+  background: var(--neutral-bg); color: var(--neutral); }
+.q-ic.tone-bad { background: var(--bad-bg); color: var(--bad); }
+.q-ic.tone-warn { background: var(--warn-bg); color: var(--warn); }
+.q-ic.tone-info { background: var(--info-bg); color: var(--info); }
+.q-main { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.q-main b { font-weight: var(--fw-medium); }
+.q-main span { font-size: var(--fs-meta); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-side { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: var(--fs-meta);
+  color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.q-more { padding: 10px var(--s-panel); border-top: 1px solid var(--border); font-size: var(--fs-meta); color: var(--text-3); }
+
+/* Clinic rhythm: 7 day rows by 24 hour cells. Magnitude is one hue (the chart green) mixed over the empty-cell
+   surface by --v, so the ramp is sequential and sits in both themes; the exact count is in each cell's title. */
+.rhythm { display: grid; grid-template-columns: auto repeat(24, minmax(0, 1fr)); gap: 3px; align-items: center; }
+.rh-day { grid-column: 1; padding-right: 8px; font-size: var(--fs-xs); color: var(--text-2); text-align: end; white-space: nowrap; }
+.rh-c { aspect-ratio: 1; border-radius: 3px; background: color-mix(in oklch, var(--ch-1) calc(var(--v) * 100%), var(--surface-2)); }
+.rh-tick { font-size: var(--fs-xs); color: var(--text-3); }
+.rh-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-top: 14px; font-size: var(--fs-meta); color: var(--text-2); }
+.rh-foot b { color: var(--text); font-weight: var(--fw-medium); }
+.rh-scale { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); }
+.rh-scale .rh-c { width: 12px; }
 
 /* ---------------------------------------------------------------- ask: the participant chat window, for staff questions */
 .ask-window .chat-top .small { flex-shrink: 0; }

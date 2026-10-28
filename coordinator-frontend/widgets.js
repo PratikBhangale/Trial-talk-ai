@@ -112,8 +112,7 @@ async function loadAlerts() {
   renderStable($('#alertList'), shown.alerts.length ? shown.alerts.map(safeAlertCard).join('')
     : Widgets.alertScope === 'resolved' ? emptyState('check', 'No resolved alerts', 'Alerts resolved in the last 30 days appear here with their resolution notes.')
       : emptyState('check', 'No active alerts', 'When a participant reports an adverse event or uses emergency words in chat, the alert appears here right away.'));
-  renderStable($('#ovAlerts'), alerts.length ? `<ul class="list">${alerts.slice(0, 4).map(alertRow).join('')}</ul>`
-    : emptyState('check', 'No active alerts', 'All clear at your sites.'));
+  Widgets.qAlerts = alerts; window.ovPulse?.();   // the overview's action queue and briefing rebuild from this stash
   Widgets.arriving = new Set(); Widgets.justAcked = null;
 }
 
@@ -147,14 +146,6 @@ function alertCard(a) {
       </div>`}
     </div>
   </article>`;
-}
-
-// Overview: one line per active alert. The full card, with its actions, lives on the Emergency alerts page.
-function alertRow(a) {
-  return `<li class="alert-row st-${esc(a.status)}">
-    <div class="list-main"><b><a href="#/alerts">${esc(a.full_name)}</a></b>
-      <span><span class="sev-text sev-${esc(a.severity)}">${esc(SEV_LABEL[a.severity] || humanize(a.severity))}</span> · ${esc(SRC_LABEL[a.source] || humanize(a.source))}${a.message ? ` · “${esc(a.message)}”` : ''}</span></div>
-    <div class="list-side">${chip(a.status)}<time datetime="${esc(a.created_at)}">${esc(ago(a.created_at))}</time></div></li>`;
 }
 
 async function alertAction(action, id, name) {
