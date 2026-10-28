@@ -30,7 +30,7 @@ for _path in (LAMBDAS, DB_SQL):  # DB_SQL for run_sql.split_sql, the splitter wr
 
 # Applied in order to a fresh database. db/ files are not idempotent (plain CREATE TABLE/ROLE/POLICY): once only.
 SCHEMA_FILES = [DB_SQL / "01_schema.sql", DB_SQL / "02_roles_rls.sql", DB_SQL / "05_telemetry.sql",
-                DB_SQL / "06_alerts_web.sql"]
+                DB_SQL / "06_alerts_web.sql", DB_SQL / "07_studies.sql"]
 SEED_FILE = DB_SQL / "03_seed.sql"
 
 # boto3 isn't needed locally; every AWS client is replaced with a fake.
@@ -45,7 +45,8 @@ if "boto3" not in sys.modules:
 
 # Fake secret ARN -> the db/02_roles_rls.sql login it stands for. The server trusts local connections,
 # so the CHANGE_ME passwords in that file are never used.
-LOGINS = {"staff": "tt_portal", "participant": "tt_participant", "messaging": "tt_messaging", "agent": "tt_agent"}
+LOGINS = {"staff": "tt_portal", "participant": "tt_participant", "messaging": "tt_messaging", "agent": "tt_agent",
+          "admin": "postgres"}  # admin = the cluster master user: db/ migrations and db/seed_demo_clinic.py
 
 
 # ------------------------------------------------------------------ throwaway Postgres

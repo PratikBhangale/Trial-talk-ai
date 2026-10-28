@@ -24,6 +24,8 @@ The database is loaded with the synthetic data from `03_seed.sql` (see [Test dat
 | `04_db_tests.sql` | 19 SQL tests (permissions, RLS, append-only, dedupe, versioning) |
 | `05_telemetry.sql` | `trial.telemetry_spans`, where services store OpenTelemetry spans (see [Telemetry](#telemetry)) |
 | `06_alerts_web.sql` | `trial.emergency_alerts` (SOS button and emergency keywords), the `web` channel on `trial.communications`, and the telemetry retention grant (see [Alerts and the web channel](#alerts-and-the-web-channel)) |
+| `07_studies.sql` | `trial.studies`: one row per trial (id, name, phase, condition, description). Reference data, no PHI, no RLS; every service role can read it. Holds the five study rows (`KOA-301`, the live study, plus the demo clinic's `HTN-205`, `DM2-410`, `MIG-118`, `AST-302`). Idempotent |
+| `seed_demo_clinic.py` | fills the four demo studies with ~15 synthetic participants each and 3 weeks of doses, symptoms, WhatsApp messages and alerts, through the Data API as the master user. Never touches `KOA-301`. `--dry-run` prints row counts; `--teardown` removes only those four studies' data (it lifts the no-delete triggers inside its own transaction) |
 | `05_alerts_router_write.sql` | removed: applied to Aurora manually on Oct 28, superseded by `06_alerts_web.sql` |
 | `99_teardown.sql` | drops everything (destroys data) |
 | `run_sql.py` | runs the files above through the Data API |
@@ -146,7 +148,7 @@ The RDS **Query editor can't run these files**: it splits on every `;`, includin
 pip install boto3 "botocore[crt]"      # the crt extra is needed for `aws login` profiles
 python3 run_sql.py --profile <your-profile> \
   --cluster-arn <cluster ARN> --secret-arn <master secret ARN> \
-  01_schema.sql 02_roles_rls.sql 03_seed.sql 04_db_tests.sql 05_telemetry.sql 06_alerts_web.sql
+  01_schema.sql 02_roles_rls.sql 03_seed.sql 04_db_tests.sql 05_telemetry.sql 06_alerts_web.sql 07_studies.sql
 ```
 
 - It sends one statement at a time and stops at the first failure.

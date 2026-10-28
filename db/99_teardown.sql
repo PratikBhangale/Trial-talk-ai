@@ -1,6 +1,7 @@
--- Drops everything 01-06 created, so the scripts can be re-run from scratch. Run as the master user.
+-- Drops everything 01-07 created, so the scripts can be re-run from scratch. Run as the master user.
 -- Destroys all data in pii and trial.
 
+DROP TABLE IF EXISTS trial.studies;
 DROP TABLE IF EXISTS trial.emergency_alerts;
 DROP TABLE IF EXISTS trial.telemetry_spans;
 DROP SCHEMA IF EXISTS tt_test CASCADE;
