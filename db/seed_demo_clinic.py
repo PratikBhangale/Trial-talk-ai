@@ -27,13 +27,19 @@ Usage (as the cluster MASTER user, like run_sql.py):
 Idempotent: participants are inserted ON CONFLICT DO NOTHING, and a study that already has participants is skipped
 entirely (no history is generated twice). Each study is seeded in its own transaction.
 
---teardown deletes the four demo studies' rows only. The append-only triggers block DELETE even for the owner, so
-inside ONE transaction it runs, as the master user:
+--teardown deletes the seeder's own rows only. Run it OFF-HOURS: it briefly locks four tables live traffic writes to.
+A demo participant is one in DEMO_STUDIES that also carries the seeder's FINGERPRINT (+1555 phone and a
+P-HTN-01 style id). Staff can enroll a real person into a demo study (study_id is free text), so before anything
+is deleted the script lists demo-study participants WITHOUT the fingerprint and aborts if there are any; the DELETE
+itself also requires the fingerprint. The append-only triggers block DELETE even for the owner, so inside ONE
+transaction it runs, as the master user:
+  SET LOCAL lock_timeout = '5s';     -- never queue behind (or block) live writes for long
+  <the fingerprint guard: abort, listing the ids, if a demo study holds anyone else>
   ALTER TABLE trial.clinical_events  DISABLE TRIGGER clinical_events_append_only;
   ALTER TABLE trial.communications   DISABLE TRIGGER communications_no_delete;
   ALTER TABLE trial.reminders        DISABLE TRIGGER reminders_no_delete;
   ALTER TABLE trial.emergency_alerts DISABLE TRIGGER emergency_alerts_no_delete;
-  <one DELETE statement, child tables first, scoped to study_id IN DEMO_STUDIES>
+  <one DELETE statement, child tables first, scoped to study_id IN DEMO_STUDIES AND the fingerprint>
   ALTER TABLE ... ENABLE TRIGGER ... (same four)
 Because it is one transaction, a failure rolls the DISABLEs back too: the triggers are never left off, and the
 ALTERs' table locks mean no other session can delete anything while they are off. communications and
@@ -665,7 +671,13 @@ NO_DELETE_TRIGGERS = [
     ("trial.reminders", "reminders_no_delete"),
     ("trial.emergency_alerts", "emergency_alerts_no_delete"),
 ]
-_DEMO = "(SELECT participant_id FROM pii.participants WHERE study_id = ANY(:studies::text[]))"
+# The seeder's fingerprint: every participant it writes matches this, and teardown deletes nobody else.
+FINGERPRINT = "phone_e164 LIKE '+1555%' AND participant_id ~ '^P-(HTN|DM2|MIG|AST)-[0-9]{2}$'"
+_DEMO = f"(SELECT participant_id FROM pii.participants WHERE study_id = ANY(:studies::text[]) AND {FINGERPRINT})"
+# Demo-study participants the seeder did not write (a real enrollment into a demo study): teardown aborts on any.
+TEARDOWN_GUARD = ("SELECT participant_id, phone_e164, study_id FROM pii.participants "
+                  f"WHERE study_id = ANY(:studies::text[]) AND NOT ({FINGERPRINT}) ORDER BY participant_id")
+LOCK_TIMEOUT = "SET LOCAL lock_timeout = '5s'"
 # One statement: communications and clinical_events reference each other, and foreign keys are checked at the end
 # of the statement, so every child row is gone by then. Child tables first, participants last.
 TEARDOWN_DELETE = f"""
@@ -673,16 +685,18 @@ WITH a AS (DELETE FROM trial.emergency_alerts WHERE participant_id IN {_DEMO} RE
      c AS (DELETE FROM trial.communications   WHERE participant_id IN {_DEMO} RETURNING 1),
      e AS (DELETE FROM trial.clinical_events  WHERE participant_id IN {_DEMO} RETURNING 1),
      r AS (DELETE FROM trial.reminders        WHERE participant_id IN {_DEMO} RETURNING 1),
-     p AS (DELETE FROM pii.participants       WHERE study_id = ANY(:studies::text[]) RETURNING 1)
+     p AS (DELETE FROM pii.participants       WHERE participant_id IN {_DEMO} RETURNING 1)
 SELECT (SELECT count(*) FROM a) AS emergency_alerts, (SELECT count(*) FROM c) AS communications,
        (SELECT count(*) FROM e) AS clinical_events, (SELECT count(*) FROM r) AS reminders,
        (SELECT count(*) FROM p) AS participants"""
 
 
 def teardown_statements():
-    """Every statement --teardown runs, in order, in one transaction: (sql, params)."""
+    """Every statement --teardown runs, in order, in one transaction: (sql, params). TEARDOWN_GUARD is a check:
+    teardown() aborts if it returns any row."""
     studies = pg_array(DEMO_STUDIES)
-    stmts = [(f"ALTER TABLE {t} DISABLE TRIGGER {g}", {}) for t, g in NO_DELETE_TRIGGERS]
+    stmts = [(LOCK_TIMEOUT, {}), (TEARDOWN_GUARD, {"studies": studies})]
+    stmts += [(f"ALTER TABLE {t} DISABLE TRIGGER {g}", {}) for t, g in NO_DELETE_TRIGGERS]
     stmts.append((TEARDOWN_DELETE, {"studies": studies}))
     stmts += [(f"ALTER TABLE {t} ENABLE TRIGGER {g}", {}) for t, g in NO_DELETE_TRIGGERS]
     return stmts
@@ -718,6 +732,13 @@ class DataApi:
     def rollback(self, tx):
         self.rds.rollback_transaction(resourceArn=self.db["resourceArn"], secretArn=self.db["secretArn"],
                                       transactionId=tx)
+
+    def rollback_quietly(self, tx):
+        """Roll back after a failure without masking it (e.g. the commit failed after the server committed)."""
+        try:
+            self.rollback(tx)
+        except Exception as e:
+            print(f"   rollback failed too (the original error follows): {e}", file=sys.stderr)
 
     def q(self, sql, tx=None, **params):
         kw = dict(self.db, sql=sql, formatRecordsAs="JSON",
@@ -764,7 +785,7 @@ def seed(api, now, seed_value=0, out=print):
                         raise RuntimeError(f"{study}: {len(got)} of {len(json.loads(payload))} participants inserted")
             api.commit(tx)
         except BaseException:
-            api.rollback(tx)
+            api.rollback_quietly(tx)
             raise
         c = counts(rows)
         out(f"==> {study}: " + ", ".join(f"{k.strip()} {v}" for k, v in c.items()))
@@ -779,11 +800,19 @@ def teardown(api, out=print):
         for sql, params in teardown_statements():
             out(f"   {' '.join(sql.split())[:110]}")
             rows = api.q(sql, tx=tx, **params)
+            if sql is TEARDOWN_GUARD:
+                if rows:
+                    raise SystemExit(
+                        f"ABORTED, nothing deleted: {len(rows)} participant(s) in the demo studies were not written by "
+                        "this seeder (no +1555 phone / P-<STUDY>-NN id), so they may be real people: "
+                        + ", ".join(f"{r['participant_id']} ({r['study_id']})" for r in rows)
+                        + ". Move them out of the demo studies (or remove them by hand) first.")
+                continue
             if rows:
                 deleted = rows[0]
         api.commit(tx)
     except BaseException:
-        api.rollback(tx)
+        api.rollback_quietly(tx)
         raise
     out("deleted: " + ", ".join(f"{k} {v}" for k, v in deleted.items()))
     return deleted

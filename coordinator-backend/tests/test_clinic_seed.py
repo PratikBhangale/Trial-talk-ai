@@ -249,15 +249,63 @@ def test_teardown_sql_is_scoped_and_restores_triggers():
     stmts = sdc.teardown_statements()
     sqls = [s for s, _ in stmts]
     n = len(sdc.NO_DELETE_TRIGGERS)
-    assert [s.split()[3] for s in sqls[:n]] == ["DISABLE"] * n
-    assert [s.split()[3] for s in sqls[-n:]] == ["ENABLE"] * n
-    assert [s.replace("DISABLE", "ENABLE") for s in sqls[:n]] == sqls[-n:]
+    # lock timeout first, then the fingerprint guard, both before any trigger is touched
+    assert sqls[0] == "SET LOCAL lock_timeout = '5s'"
+    assert sqls[1] is sdc.TEARDOWN_GUARD and stmts[1][1] == {"studies": "{HTN-205,DM2-410,MIG-118,AST-302}"}
+    body = sqls[2:]
+    assert [s.split()[3] for s in body[:n]] == ["DISABLE"] * n
+    assert [s.split()[3] for s in body[-n:]] == ["ENABLE"] * n
+    assert [s.replace("DISABLE", "ENABLE") for s in body[:n]] == body[-n:]
     assert {g for _, g in sdc.NO_DELETE_TRIGGERS} == {"clinical_events_append_only", "communications_no_delete",
                                                       "reminders_no_delete", "emergency_alerts_no_delete"}
-    delete_sql, params = stmts[n]
+    delete_sql, params = stmts[2 + n]
+    assert delete_sql is sdc.TEARDOWN_DELETE and len(stmts) == 3 + 2 * n
     assert params == {"studies": "{HTN-205,DM2-410,MIG-118,AST-302}"}
     assert "KOA" not in delete_sql and "KOA" not in params["studies"]
+    # every DELETE (participants included) is scoped by study AND the seeder's fingerprint
+    assert delete_sql.count("DELETE FROM") == 5
     assert delete_sql.count("study_id = ANY(:studies::text[])") == 5
+    assert delete_sql.count(sdc.FINGERPRINT) == 5
+    assert "phone_e164 LIKE '+1555%'" in sdc.FINGERPRINT
+    assert "participant_id ~ '^P-(HTN|DM2|MIG|AST)-[0-9]{2}$'" in sdc.FINGERPRINT
+    assert f"NOT ({sdc.FINGERPRINT})" in sdc.TEARDOWN_GUARD
+
+
+def test_fingerprint_matches_every_seeded_participant_only(plans):
+    import re
+    phone, pid = re.compile(r"^\+1555"), re.compile(r"^P-(HTN|DM2|MIG|AST)-[0-9]{2}$")
+    for rows, _ in plans.values():
+        for p in rows["participants"]:
+            assert phone.match(p["phone_e164"]) and pid.match(p["participant_id"])
+    for real in ("P-0142", "P-1001", "P-HTN-001", "HTN-01"):
+        assert not pid.match(real)
+
+
+def test_failed_commit_is_not_masked_by_rollback(capsys):
+    """Commit fails (e.g. the server committed but the response was lost) and rollback then fails too: the caller
+    must see the commit error, not the rollback one."""
+
+    class Rds:
+        def begin_transaction(self, **kw):
+            return {"transactionId": "t1"}
+
+        def execute_statement(self, sql, **kw):
+            if "trial.studies" in sql:
+                return {"formattedRecords": json.dumps([{"study_id": s} for s in sdc.DEMO_STUDIES])}
+            if "INSERT INTO pii.participants" in sql:
+                rows = json.loads(kw["parameters"][0]["value"]["stringValue"])
+                return {"formattedRecords": json.dumps([{"participant_id": r["participant_id"]} for r in rows])}
+            return {"formattedRecords": "[]"}
+
+        def commit_transaction(self, **kw):
+            raise RuntimeError("commit response lost")
+
+        def rollback_transaction(self, **kw):
+            raise RuntimeError("transaction not found")
+
+    with pytest.raises(RuntimeError, match="commit response lost"):
+        sdc.main(["--cluster-arn", "a", "--secret-arn", "s"], rds=Rds(), now=NOW)
+    assert "rollback failed too" in capsys.readouterr().err
 
 
 def test_dry_run_prints_counts_without_aws(monkeypatch, capsys):
@@ -305,14 +353,19 @@ def clinic(pg, clean_db, admin):
     run_sql_file(admin, SEED_FILE)                 # KOA-301's rows stand in for the live data
     rds = FakeRdsData(pg["port"])
     args = ["--cluster-arn", "arn:local", "--secret-arn", "admin"]
-    yield lambda *extra: sdc.main(args + list(extra), rds=rds)
+    now = datetime.now(timezone.utc)   # fixed for the whole test, so expected counts can't straddle a boundary
+
+    def run(*extra):
+        return sdc.main(args + list(extra), rds=rds, now=now)
+    run.now = now
+    yield run
     wipe(admin)
 
 
 def test_seed_reseed_and_teardown_against_postgres(clinic, admin, capsys):
     koa_before = _table_counts(admin, "= 'KOA-301'")
     assert koa_before["participants"] == 3
-    now = datetime.now(timezone.utc)
+    now = clinic.now
 
     result = clinic()
     expected = {s: sdc.counts(sdc.plan_study(s, now)[0]) for s in sdc.DEMO_STUDIES}
@@ -371,8 +424,37 @@ def test_teardown_failure_leaves_triggers_on(clinic, admin, monkeypatch):
     enabled = admin.execute("SELECT DISTINCT tgenabled FROM pg_trigger WHERE tgname = ANY(%s)",
                             ([g for _, g in sdc.NO_DELETE_TRIGGERS],)).fetchall()
     assert enabled == [("O",)]
-    assert _table_counts(admin, "= 'HTN-205'")["participants"] == sdc.counts(sdc.plan_study("HTN-205", NOW)[0])[
-        "participants"]
+    planned = sdc.counts(sdc.plan_study("HTN-205", clinic.now)[0])["participants"]
+    assert _table_counts(admin, "= 'HTN-205'")["participants"] == planned
+
+
+def test_teardown_aborts_when_a_demo_study_holds_a_real_participant(clinic, admin, capsys, monkeypatch):
+    """Staff can enroll a real person into a demo study (study_id is free text): teardown must list them and stop,
+    deleting nothing and leaving the triggers on."""
+    clinic()
+    admin.execute("INSERT INTO pii.participants (participant_id, full_name, phone_e164, study_id, site_id, status) "
+                  "VALUES ('P-1001', 'Real Person', '+13125559999', 'HTN-205', 'LAKEVIEW', 'enrolled'), "
+                  "       ('P-HTN-77X', 'Odd Id', '+15552059999', 'MIG-118', 'RIVERSIDE', 'screening')")
+    admin.execute("INSERT INTO trial.communications (participant_id, channel, direction, msg_type, body_text) "
+                  "VALUES ('P-1001', 'whatsapp', 'inbound', 'text', 'hello')")
+    before = _table_counts(admin, "<> 'KOA-301'")
+    capsys.readouterr()
+    with pytest.raises(SystemExit, match="ABORTED, nothing deleted") as err:
+        clinic("--teardown")
+    assert "P-1001 (HTN-205)" in str(err.value) and "P-HTN-77X (MIG-118)" in str(err.value)
+    assert _table_counts(admin, "<> 'KOA-301'") == before
+    enabled = admin.execute("SELECT DISTINCT tgenabled FROM pg_trigger WHERE tgname = ANY(%s)",
+                            ([g for _, g in sdc.NO_DELETE_TRIGGERS],)).fetchall()
+    assert enabled == [("O",)]
+    assert "DISABLE TRIGGER" not in capsys.readouterr().out, "the guard runs before any trigger is touched"
+
+    # even with the guard bypassed, the DELETE itself spares anyone without the fingerprint
+    monkeypatch.setattr(sdc, "TEARDOWN_GUARD", sdc.TEARDOWN_GUARD + " LIMIT 0")
+    deleted = clinic("--teardown")
+    assert int(deleted["participants"]) == before["participants"] - 2
+    left = admin.execute("SELECT participant_id FROM pii.participants WHERE study_id <> 'KOA-301' ORDER BY 1")
+    assert left.fetchall() == [("P-1001",), ("P-HTN-77X",)]
+    assert admin.execute("SELECT count(*) FROM trial.communications WHERE participant_id = 'P-1001'").fetchone()[0] == 1
 
 
 def test_seed_refuses_without_studies_table_rows(clinic, admin):
