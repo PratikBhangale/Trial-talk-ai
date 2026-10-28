@@ -206,16 +206,32 @@ def test_search_trial_docs_span_has_kb_attrs(monkeypatch):
 
 
 def test_escalate_span_has_severity_only(monkeypatch):
-    sent = []
+    sent, alerts = [], []
     monkeypatch.setattr(tools.store, "get_profile", lambda pid: {"site_id": "S1", "study_id": "T1"})
+    monkeypatch.setattr(tools.store, "insert_alert", lambda pid, sev, msg: alerts.append((pid, sev, msg)))
     monkeypatch.setattr(tools, "ses", SimpleNamespace(send_email=lambda **kw: sent.append(kw)))
     ctx = SimpleNamespace(agent=SimpleNamespace(state={"participant_id": "P-0201"}))
     with tracing.collect(None) as col:
         tools.escalate_to_coordinator(severity="routine", summary="mild headache", tool_context=ctx)
     assert sent
+    assert alerts == [("P-0201", "concern", "mild headache")]   # routine maps to the dashboard's lowest tier
     [s] = _by_name(col.result(), "tool.escalate_to_coordinator")
-    assert s["attributes"] == {"trialtalk.escalation.severity": "routine"}
+    assert s["attributes"] == {"trialtalk.escalation.severity": "routine", "trialtalk.escalation.alert_row": True}
     assert s["status"] == "OK"
+
+
+def test_escalate_raises_dashboard_alert_even_when_email_fails(monkeypatch):
+    alerts = []
+    monkeypatch.setattr(tools.store, "get_profile", lambda pid: {"site_id": "S1", "study_id": "T1"})
+    monkeypatch.setattr(tools.store, "insert_alert", lambda pid, sev, msg: alerts.append((pid, sev, msg)))
+    def _ses_down(**kw): raise RuntimeError("ses down")
+    monkeypatch.setattr(tools, "ses", SimpleNamespace(send_email=_ses_down))
+    with tracing.collect(None) as col:
+        out = tools.escalate_to_coordinator(severity="emergency", summary="chest pain", tool_context=_ctx())
+    assert out == "Coordinator alerted on the staff dashboard with severity emergency."
+    assert alerts == [("P-0201", "life_threatening", "chest pain")]
+    [s] = _by_name(col.result(), "tool.escalate_to_coordinator")
+    assert s["attributes"]["trialtalk.escalation.alert_row"] is True
 
 
 # ---- get_participant_profile -------------------------------------------------------------------
@@ -319,6 +335,7 @@ def test_profile_store_failure_returns_graceful_message(monkeypatch):
 def test_escalation_still_emails_when_profile_lookup_fails(monkeypatch):
     sent = []
     monkeypatch.setattr(tools.store, "get_profile", _db_down)
+    monkeypatch.setattr(tools.store, "insert_alert", lambda pid, sev, msg: (_ for _ in ()).throw(RuntimeError("db down")))
     monkeypatch.setattr(tools, "ses", SimpleNamespace(send_email=lambda **kw: sent.append(kw)))
     with tracing.collect(None) as col:
         out = tools.escalate_to_coordinator(severity="emergency", summary="lips swelling",
@@ -332,7 +349,8 @@ def test_escalation_still_emails_when_profile_lookup_fails(monkeypatch):
     [s] = _by_name(col.result(), "tool.escalate_to_coordinator")
     assert s["status"] == "OK"  # the alert went out; the lookup failure is recorded by type only
     assert s["attributes"] == {"trialtalk.escalation.severity": "emergency",
-                               "trialtalk.profile.lookup_failed": "RuntimeError"}
+                               "trialtalk.profile.lookup_failed": "RuntimeError",
+                               "trialtalk.escalation.alert_row": False}
 
 
 def test_profile_tool_is_registered_and_configured():

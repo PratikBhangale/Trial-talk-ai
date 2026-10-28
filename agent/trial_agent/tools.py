@@ -76,6 +76,17 @@ def escalate_to_coordinator(severity: str, summary: str, tool_context: ToolConte
         name = f"site {profile.get('site_id', 'unknown')}"
         trial = profile.get("study_id", "unknown study")
 
+        # The staff dashboard reads trial.emergency_alerts, so the escalation raises a row there first;
+        # the email still goes out even if the insert fails, and vice versa.
+        alert_severity = {"emergency": "life_threatening", "same_day_review": "urgent"}.get(severity, "concern")
+        try:
+            store.insert_alert(pid, alert_severity, summary)
+            alerted = True
+        except Exception as e:
+            print(f"\n*** ALERT ROW FAILED: {type(e).__name__} ***\n")
+            alerted = False
+        tracing.set_attrs(span, **{"trialtalk.escalation.alert_row": alerted})
+
         subject = f"[{severity.upper()}] {trial} participant alert: {name} ({pid})"
         body = (
             f"Severity: {severity}\n"
@@ -88,7 +99,8 @@ def escalate_to_coordinator(severity: str, summary: str, tool_context: ToolConte
         if not coordinator:
             print("\n*** EMAIL FAILED: no coordinator email configured ***\n")
             tracing.mark_error(span, "no coordinator email configured")
-            return "Alert could not be sent automatically. Tell the participant to contact their study site directly."
+            return (f"Coordinator alerted on the staff dashboard with severity {severity}." if alerted
+                    else "Alert could not be sent automatically. Tell the participant to contact their study site directly.")
 
         try:
             ses.send_email(
@@ -100,11 +112,12 @@ def escalate_to_coordinator(severity: str, summary: str, tool_context: ToolConte
                 }},
             )
             print(f"\n*** EMAIL SENT [{severity}] ***\n")
-            return f"Coordinator alerted by email with severity {severity}."
+            return f"Coordinator alerted{' on the staff dashboard and' if alerted else ''} by email with severity {severity}."
         except Exception as e:
             print(f"\n*** EMAIL FAILED: {e} ***\n")
             tracing.mark_error(span, f"email send failed: {type(e).__name__}")
-            return "Alert could not be sent automatically. Tell the participant to contact their study site directly."
+            return (f"Coordinator alerted on the staff dashboard with severity {severity}." if alerted
+                    else "Alert could not be sent automatically. Tell the participant to contact their study site directly.")
 
 
 @tool

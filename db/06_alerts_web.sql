@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS trial.emergency_alerts (
   alert_id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   participant_id   text NOT NULL REFERENCES pii.participants(participant_id),
   severity         text NOT NULL DEFAULT 'life_threatening' CHECK (severity IN ('life_threatening','urgent','concern')),
-  source           text NOT NULL CHECK (source IN ('sos_button','chat_keyword')),
+  source           text NOT NULL CHECK (source IN ('sos_button','chat_keyword','agent_triage')),
   message          text,                                    -- what the participant wrote, if anything
   keywords         text[],                                  -- emergency keywords that matched (chat_keyword)
   status           text NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','resolved')),
@@ -83,6 +83,9 @@ GRANT SELECT ON trial.emergency_alerts TO messaging_role;
 REVOKE INSERT ON trial.emergency_alerts FROM messaging_role;   -- drop any table-level INSERT from earlier manual grants
 GRANT INSERT (participant_id, severity, source, message, keywords) ON trial.emergency_alerts TO messaging_role;
 GRANT UPDATE (press_count, last_pressed_at, message) ON trial.emergency_alerts TO messaging_role;
+-- agent_role: the agent's triage escalations raise an alert too (source 'agent_triage'). Insert only, as the
+-- participant of its own session; see db/08_agent_alerts.sql for the live migration.
+GRANT INSERT (participant_id, severity, source, message) ON trial.emergency_alerts TO agent_role;
 
 -- Row-level security (once enabled, a role with no matching policy sees nothing)
 ALTER TABLE trial.emergency_alerts ENABLE ROW LEVEL SECURITY;
@@ -105,6 +108,9 @@ CREATE POLICY messaging_select ON trial.emergency_alerts FOR SELECT TO messaging
 CREATE POLICY messaging_insert ON trial.emergency_alerts FOR INSERT TO messaging_role WITH CHECK (true);
 CREATE POLICY messaging_update ON trial.emergency_alerts FOR UPDATE TO messaging_role
   USING (status <> 'resolved') WITH CHECK (status <> 'resolved');
+DROP POLICY IF EXISTS agent_insert ON trial.emergency_alerts;
+CREATE POLICY agent_insert ON trial.emergency_alerts FOR INSERT TO agent_role
+  WITH CHECK (participant_id = current_setting('app.participant_id', true));
 
 ------------------------------------------------------------------------------
 -- 3. Telemetry retention

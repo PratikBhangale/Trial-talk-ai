@@ -41,6 +41,34 @@ def _read(pid: str, statements: list[str]) -> list[list[dict]]:
         raise
 
 
+def insert_alert(pid: str, severity: str, message: str) -> None:
+    """One trial.emergency_alerts row (source 'agent_triage'), so the escalation shows on the staff dashboard.
+    Same transaction-and-session-context pattern as _read; RLS limits the insert to this participant."""
+    for attempt in range(3):
+        try:
+            tx = rds.begin_transaction(**DB, database=DB_NAME)["transactionId"]
+            break
+        except rds.exceptions.DatabaseResumingException:
+            time.sleep(10)
+    else:
+        raise RuntimeError("Database did not wake up in time")
+    try:
+        rds.execute_statement(**DB, database=DB_NAME, transactionId=tx,
+                              sql="SELECT set_config('app.participant_id', :pid, true)",
+                              parameters=[{"name": "pid", "value": {"stringValue": pid}}])
+        rds.execute_statement(
+            **DB, database=DB_NAME, transactionId=tx,
+            sql="INSERT INTO trial.emergency_alerts (participant_id, severity, source, message) "
+                "VALUES (:pid, :severity, 'agent_triage', :message)",
+            parameters=[{"name": "pid", "value": {"stringValue": pid}},
+                        {"name": "severity", "value": {"stringValue": severity}},
+                        {"name": "message", "value": {"stringValue": message}}])
+        rds.commit_transaction(**DB, transactionId=tx)
+    except Exception:
+        rds.rollback_transaction(**DB, transactionId=tx)
+        raise
+
+
 def get_profile(pid: str) -> dict | None:
     """The participant's non-personal profile plus their active dose reminders, or None."""
     participant, reminders = _read(pid, [
