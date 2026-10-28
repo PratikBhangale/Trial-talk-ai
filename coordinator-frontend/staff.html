@@ -272,7 +272,7 @@
           <div class="page-head">
             <div>
               <h1 id="h-observability" tabindex="-1">Observability</h1>
-              <p>How the WhatsApp pipeline and the study agent are running: traffic, errors, response time, tokens and estimated cost. Aggregates and timings only, no participant data.</p>
+              <p>How the WhatsApp pipeline and the study agent are running: traffic, errors, response time, tokens and estimated cost. Aggregates and timings only, no message content; a trace links to its participant only at your own sites.</p>
             </div>
             <div class="actions">
               <span class="live off" id="obsLive"><i></i>Connecting</span>
@@ -299,8 +299,13 @@
 
           <div class="panel flush section-gap" id="obsTracesPanel">
             <div class="obs-flush-head">
-              <div class="panel-head"><h2>Recent traces</h2><span class="tag">Newest 50</span></div>
-              <p class="panel-note">One row per inbound message, chat reply or job. Choose one to see where its time went.</p>
+              <div class="panel-head"><h2>Recent traces</h2><span class="tag" id="obsTracesTag">Newest 50 · last 24 h</span>
+                <div class="tabs" id="obsTraceFilter" role="group" aria-label="Show traces">
+                  <button type="button" data-errors="0" class="on" aria-pressed="true">All</button>
+                  <button type="button" data-errors="1" aria-pressed="false">Errors only</button>
+                </div>
+              </div>
+              <p class="panel-note">One row per inbound message, chat reply or job. Choose one to see where its time went, and where it failed.</p>
             </div>
             <div id="obsTraces"></div>
           </div>

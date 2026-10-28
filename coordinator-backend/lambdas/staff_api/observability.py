@@ -2,13 +2,15 @@
 
 Spans come from trial.telemetry_spans (written by every service; no PHI, so no site scoping there). Token totals
 come from trial.communications, which is site-scoped by row-level security like the rest of the staff API.
-The responses are aggregate numbers and span metadata only, never participant data.
+The responses are aggregate numbers and span metadata only. The one exception is a single trace's optional
+participant_id: the participant whose agent reply was logged during that trace, looked up in trial.communications
+under the same row-level security, so staff only ever get a link to a participant at their own sites.
 """
 
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from common import db
 from common.auth import Staff, require
@@ -26,6 +28,16 @@ LATENCY_BUCKET_S = 3600    # 1 hour
 CURRENT_S = 24 * 3600      # drift: current = last 24 h ...
 BASELINE_S = 8 * 24 * 3600  # ... baseline = 24 h to 8 d ago
 TRACE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+TRACE_STATUS = ("all", "errors")
+# Agent session ids name their participant: the router's "trialtalk-wa-<pid>-<local day>", right-padded with "0" to
+# the 33 characters AgentCore needs, and the participant site's "web-<pid>-<local day>" (stored unpadded). Demo
+# sessions ("trialtalk-wa-demo-<hash>-...") and anything else name no participant.
+SESSION_PID = re.compile(r"(trialtalk-wa|web)-(P-[0-9]{1,9})-([0-9]{4}-[0-9]{2}-[0-9]{2})(0*)")
+AGENT_SESSION_LEN = 33
+# A reply is logged inside its trace (the router's whatsapp.route span, the web chat's POST /me/chat span). The
+# slack covers clock skew between a Lambda and the database, and the dev server, where only the agent's own spans
+# are stored and the reply is logged just after agent.invoke ends.
+MATCH_SLACK_MS = 2000
 ISO = "YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\""
 
 # key, label, bad_direction (the direction that is a regression; "none" = informational only).
@@ -47,6 +59,25 @@ def est_cost(tokens_in, tokens_out) -> float:
 
 def _num(v):
     return None if v is None else float(v)
+
+
+def pid_from_session(session_id) -> str | None:
+    """The participant id an agent session id names, or None when it is not exactly one of the two formats."""
+    if not isinstance(session_id, str) or len(session_id) > 64:
+        return None
+    m = SESSION_PID.fullmatch(session_id)
+    if not m:
+        return None
+    prefix, pid, day, pad = m.groups()
+    core = session_id[:len(session_id) - len(pad)]
+    # The router pads to exactly 33 characters (and not at all when already that long); web sessions are never padded.
+    if session_id != (core.ljust(AGENT_SESSION_LEN, "0") if prefix == "trialtalk-wa" else core):
+        return None
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        return None
+    return pid
 
 
 def drift_metrics(current: dict, baseline: dict) -> list[dict]:
@@ -72,6 +103,10 @@ def _int_param(event: dict, name: str, default: int, lo: int, hi: int) -> int:
         return min(max(int(raw), lo), hi) if raw not in (None, "") else default
     except ValueError:
         raise HttpError(400, f"{name} must be a number")
+
+
+def _int(v):
+    return None if v is None else int(v)
 
 
 def _r1(v):
@@ -109,7 +144,10 @@ WINDOW_ROOTS = (
                                    "WHERE start_ts >= to_timestamp(:since::bigint)) AND ") + ") r "
     "WHERE r.start_ts >= to_timestamp(:since::bigint)) ")
 
-ALL_ROOTS = "WITH roots AS (" + _ROOTS.format(scope="") + ") "
+# The traces list: roots of the traces with a span since :since, the same population WINDOW_ROOTS counts (the list
+# filters r.start_ts >= :since too), so the error KPI and the "errors only" list agree.
+LIST_ROOTS = ("WITH roots AS (" + _ROOTS.format(scope="c.trace_id IN (SELECT trace_id FROM trial.telemetry_spans "
+                                                      "WHERE start_ts >= to_timestamp(:since::bigint)) AND ") + ") ")
 
 
 # ------------------------------------------------------------------ queries
@@ -225,15 +263,24 @@ def observability(event, staff: Staff):
 
 @router.route("GET", "/staff/observability/traces")
 def traces(event, staff: Staff):
-    """Most recent traces, one row per trace (its root, see ALL_ROOTS), newest first."""
+    """Most recent traces of the last `hours`, one row per trace (its root, see _ROOTS), newest first.
+    status=errors keeps only traces with an ERROR span (the rule the error KPI counts by)."""
     require(staff, "ops:read")
     limit = _int_param(event, "limit", 50, 1, 200)
+    hours = _int_param(event, "hours", 24, 1, MAX_HOURS)
+    status = query_params(event).get("status") or "all"
+    if status not in TRACE_STATUS:
+        raise HttpError(400, "status must be all or errors")
+    since = int(time.time()) - hours * 3600
     with db.tx(site_ids=staff.site_ids) as t:
         rows = t.query(
-            ALL_ROOTS + f"SELECT r.trace_id, to_char(r.start_ts AT TIME ZONE 'UTC', '{ISO}') AS started_at, "
+            LIST_ROOTS + f"SELECT r.trace_id, to_char(r.start_ts AT TIME ZONE 'UTC', '{ISO}') AS started_at, "
             "  r.name AS root_name, r.service, r.duration_ms, agg.span_count, agg.tokens, "
             "  CASE WHEN agg.has_error THEN 'ERROR' ELSE r.status END AS status "
-            "FROM (SELECT * FROM roots ORDER BY start_ts DESC, span_id LIMIT :limit::int) r "
+            "FROM (SELECT * FROM roots WHERE start_ts >= to_timestamp(:since::bigint) "
+            "  AND (NOT :errors::boolean OR EXISTS (SELECT 1 FROM trial.telemetry_spans e "
+            "       WHERE e.trace_id = roots.trace_id AND e.status = 'ERROR')) "
+            "  ORDER BY start_ts DESC, span_id LIMIT :limit::int) r "
             "JOIN LATERAL (SELECT count(*) AS span_count, bool_or(w.status = 'ERROR') AS has_error, "
             # Tokens: agent.invoke spans only (the router's agent.call span repeats the same numbers); a trace with
             # no token-bearing agent.invoke falls back to its agent.call spans.
@@ -248,17 +295,47 @@ def traces(event, staff: Staff):
             "        + CASE WHEN s.attrs->>'gen_ai.usage.output_tokens' ~ '^[0-9]+$' "
             "          THEN (s.attrs->>'gen_ai.usage.output_tokens')::bigint ELSE 0 END) END AS tok "
             "    FROM trial.telemetry_spans s WHERE s.trace_id = r.trace_id) w) agg ON true "
-            "ORDER BY r.start_ts DESC, r.span_id", limit=limit)
+            "ORDER BY r.start_ts DESC, r.span_id", limit=limit, since=since, errors=status == "errors")
     for r in rows:
         r["duration_ms"] = _num(r["duration_ms"])
         r["span_count"] = int(r["span_count"])
         r["tokens"] = None if r["tokens"] is None else int(r["tokens"])
-    return 200, {"traces": rows}
+    return 200, {"traces": rows, "hours": hours, "status": status}
+
+
+def _trace_participant(t: db.Tx, trace_id: str) -> str | None:
+    """The participant whose message was logged during this trace, or None when there is no confident match.
+
+    Spans carry no participant (no PHI in telemetry), so the link comes from trial.communications under the caller's
+    row-level security: rows created inside the trace's time window whose session_id names a participant (see
+    pid_from_session) that is the row's own participant_id. When the trace reports agent token usage, only rows with
+    exactly those token counts qualify (the agent's reply logs the same numbers). Exactly one participant must remain;
+    two or more (overlapping conversations) give None, never a guess.
+    """
+    rows = t.query(
+        "WITH w AS (SELECT min(start_ts) AS lo, max(start_ts + duration_ms * interval '1 millisecond') AS hi, "
+        "  sum(CASE WHEN attrs->>'gen_ai.usage.input_tokens' ~ '^[0-9]+$' "
+        "      THEN (attrs->>'gen_ai.usage.input_tokens')::bigint END) FILTER (WHERE name = 'agent.invoke') AS tin, "
+        "  sum(CASE WHEN attrs->>'gen_ai.usage.output_tokens' ~ '^[0-9]+$' "
+        "      THEN (attrs->>'gen_ai.usage.output_tokens')::bigint END) FILTER (WHERE name = 'agent.invoke') AS tout "
+        "  FROM trial.telemetry_spans WHERE trace_id = :tid) "
+        "SELECT c.participant_id, c.session_id, c.input_tokens, c.output_tokens, w.tin, w.tout "
+        "FROM trial.communications c, w "
+        "WHERE c.session_id IS NOT NULL AND c.participant_id IS NOT NULL "
+        "AND c.created_at BETWEEN w.lo - :slack::int * interval '1 millisecond' "
+        "                     AND w.hi + :slack::int * interval '1 millisecond' "
+        "ORDER BY c.created_at LIMIT 50", tid=trace_id, slack=MATCH_SLACK_MS)
+    rows = [r for r in rows if pid_from_session(r["session_id"]) == r["participant_id"]]
+    rows = [r for r in rows if r["tin"] is None or r["tout"] is None
+            or (_int(r["input_tokens"]), _int(r["output_tokens"])) == (_int(r["tin"]), _int(r["tout"]))]
+    pids = {r["participant_id"] for r in rows}
+    return pids.pop() if len(pids) == 1 else None
 
 
 @router.route("GET", "/staff/observability/traces/{trace_id}")
 def trace(event, staff: Staff, trace_id: str):
-    """Every span of one trace, start time ascending (the waterfall). Unknown ids give an empty list."""
+    """Every span of one trace, start time ascending (the waterfall). Unknown ids give an empty list.
+    participant_id is present only when the trace links confidently to a participant at the caller's sites."""
     require(staff, "ops:read")
     if not TRACE_ID.fullmatch(trace_id):
         raise HttpError(400, "Invalid trace id")
@@ -269,6 +346,7 @@ def trace(event, staff: Staff, trace_id: str):
             f"  to_char(s.created_at AT TIME ZONE 'UTC', '{ISO}') AS created_at "
             "FROM trial.telemetry_spans s WHERE s.trace_id = :tid ORDER BY s.start_ts, s.span_id LIMIT 1000",
             tid=trace_id)
+        pid = _trace_participant(t, trace_id) if rows else None
     for r in rows:
         r["duration_ms"] = _num(r["duration_ms"])
         if isinstance(r["attrs"], str):  # the Data API hands jsonb back as text
@@ -276,4 +354,4 @@ def trace(event, staff: Staff, trace_id: str):
                 r["attrs"] = json.loads(r["attrs"])
             except ValueError:
                 r["attrs"] = {}
-    return 200, {"spans": rows}
+    return 200, {"spans": rows, **({"participant_id": pid} if pid else {})}

@@ -554,6 +554,36 @@ h3.sub { margin: 28px 0 12px; }
 .obs-trace-kpis .kpi { padding: 16px var(--s-card); }
 .obs-trace-kpis .kpi b { font-size: var(--fs-h2); }
 .obs-trace-id { margin: 0 0 24px; overflow-wrap: anywhere; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.obs-trace-id:has(.obs-pid) { max-width: none; }
+.obs-trace-id .obs-pid { margin-inline-start: auto; }
+#obsTraceFilter { flex-shrink: 0; }
+#obsTracesPanel { scroll-margin-top: calc(var(--header-h) + 16px); }   /* the error-rate tile scrolls here; clear the sticky header */
+/* The error-rate tile as a button: the tile's look, a button's behaviour (focus ring, keyboard). */
+button.kpi { font: inherit; line-height: normal; text-align: start; justify-content: stretch; align-items: start; white-space: normal;
+  min-height: 0; height: auto; padding: 20px var(--s-card) 18px; border-radius: 0; box-shadow: none; user-select: auto;
+  transition-property: background-color; transition-duration: var(--dur-fast); }
+button.kpi:hover { background: var(--surface-2); color: var(--text); box-shadow: none; }
+button.kpi:active:not(:disabled) { scale: 1; }
+button.kpi:focus-visible { outline-offset: -2px; border-radius: 0; }
+.kpi .kpi-go { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-weight: var(--fw-medium); }
+.kpi .kpi-go .icon { width: 14px; height: 14px; }
+/* Where a trace failed: one line per ERROR span, each jumps to its row in the waterfall. */
+.obs-fail { margin-bottom: 24px; }
+.obs-fail small { color: var(--text-2); font-size: var(--fs-xs); }
+.obs-fail-list { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 4px; }
+.obs-fail-item { display: grid; grid-template-columns: minmax(0, 1fr); justify-content: stretch; justify-items: start; gap: 4px; width: 100%; min-height: 0; padding: 8px 10px; border-radius: var(--r-sm);
+  white-space: normal; text-align: start; line-height: 1.35; background: color-mix(in oklch, var(--surface) 70%, transparent); box-shadow: inset 0 0 0 1px var(--bad-line); }
+.obs-fail-item:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--bad-solid); }
+.obs-fail-item:active:not(:disabled) { scale: 1; }
+.obs-fail-name { font-weight: var(--fw-medium); color: var(--bad); overflow-wrap: anywhere; }
+.obs-fail-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: var(--fs-xs); font-weight: var(--fw-normal); color: var(--text-2); }
+.obs-fail-meta .tag { height: 20px; }
+.wf-row.is-error { background: var(--bad-bg); box-shadow: inset 3px 0 0 var(--bad-solid); padding-inline: 8px; margin-inline: -8px; }
+.wf-row.is-error .wf-label b { color: var(--bad); }
+@media (prefers-reduced-motion: no-preference) {
+  .wf-row.flash { animation: wf-flash 1.2s var(--ease-out); }
+}
+@keyframes wf-flash { 0%, 30% { box-shadow: inset 3px 0 0 var(--bad-solid), 0 0 0 2px var(--focus); } }
 .drift-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
 .drift-card { display: grid; gap: 6px; align-content: start; padding: var(--s-card); border-radius: var(--r-md); background: var(--surface); box-shadow: 0 0 0 1px var(--border); min-width: 0; }
 .drift-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }

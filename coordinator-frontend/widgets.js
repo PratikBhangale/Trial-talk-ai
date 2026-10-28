@@ -179,7 +179,8 @@ async function alertAction(action, id, name) {
 
 // ------------------------------------------------------------ observability
 // One page over trial.telemetry_spans: KPIs, three charts, recent traces (each opens as a waterfall) and behavior drift.
-// Every number is an aggregate or a timing; nothing here names a participant. Costs are estimates at list prices.
+// Every number is an aggregate or a timing. The one participant reference is a trace's "Open participant" link, which the API
+// gives only for a participant at the viewer's own sites. Costs are estimates at list prices.
 const usd = v => { v = +v || 0; return '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })); };
 const dur = v => v === null || v === undefined ? '—' : v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)} s` : `${Math.round(v)} ms`;
 const compactN = n => Number(n || 0) >= 10000 ? new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : nf(n);
@@ -197,6 +198,10 @@ const utcStampFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'n
 
 // Polls only while the page is open and the tab is visible: these are the heaviest queries the portal makes.
 const obsActive = () => !!TT.user && state.page === 'observability' && !document.hidden;
+// The traces list covers the same 24 hours as the KPIs, so "Errors only" lists exactly the failures the error rate counts.
+const OBS_HOURS = 24, OBS_TRACE_LIMIT = 50;
+const obsTraceFilter = () => Widgets.obsErrors ? 'errors' : 'all';
+const tracesPath = () => `/staff/observability/traces?limit=${OBS_TRACE_LIMIT}&hours=${OBS_HOURS}${Widgets.obsErrors ? '&status=errors' : ''}`;
 
 async function loadObs(loud) {
   if (!TT.user || Widgets.obsBusy) return;
@@ -204,22 +209,46 @@ async function loadObs(loud) {
   if (!Widgets.obsLoaded) ['#obsKpis', '#obsRequests', '#obsLatency', '#obsTokens', '#obsTraces', '#obsDrift']
     .forEach(s => { if (!$(s).childElementCount) $(s).innerHTML = skeleton(3); });
   try {
-    const [o, { traces }] = await Promise.all([
-      api('GET', '/staff/observability?hours=24', undefined, { quiet: !loud }),
-      api('GET', '/staff/observability/traces?limit=50', undefined, { quiet: !loud })]);
+    const [o, list] = await Promise.all([
+      api('GET', `/staff/observability?hours=${OBS_HOURS}`, undefined, { quiet: !loud }),
+      api('GET', tracesPath(), undefined, { quiet: !loud })]);
     Widgets.obsLoaded = true;
     setLive('obsLive', true);
-    renderObs(o, traces);
+    renderObs(o, list);
   } catch { setLive('obsLive', false); }
   finally { Widgets.obsBusy = false; }
 }
 
-function renderObs(o, traces) {
-  const s = o.summary, rate = s.error_rate * 100;
+// "All" / "Errors only": refetches just the list. A response for the other filter (a poll already in flight when the
+// filter changed) is dropped, so the table never shows OK traces under "Errors only".
+async function setTraceFilter(errorsOnly) {
+  errorsOnly = !!errorsOnly;
+  $$('#obsTraceFilter button').forEach(b => { const on = (b.dataset.errors === '1') === errorsOnly; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+  if (Widgets.obsErrors === errorsOnly && Widgets.obsTraceList) return;
+  Widgets.obsErrors = errorsOnly; Widgets.obsAllTraces = false;
+  $('#obsTraces').innerHTML = skeleton(3); $('#obsTraces')._html = null;
+  try { renderTraces(await api('GET', tracesPath(), undefined, { quiet: true })); }
+  catch { if (Widgets.obsErrors === errorsOnly) $('#obsTraces').innerHTML = emptyState('alert', 'Unable to load traces', 'Try Refresh in a moment.'); }
+}
+// The error-rate tile drills down: errors-only list, scrolled into view.
+function showFailedTraces() {
+  setTraceFilter(true);
+  const panel = $('#obsTracesPanel');
+  panel.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  $('#obsTraceFilter [data-errors="1"]').focus({ preventScroll: true });
+}
+
+function renderObs(o, list) {
+  const s = o.summary, rate = s.error_rate * 100, tone = rate >= 5 ? 'tone-bad' : rate >= 1 ? 'tone-warn' : '';
+  // With failures, the error-rate tile is a button that lists them; with none there is nothing to drill into.
+  const errTile = s.errors
+    ? `<button type="button" class="kpi kpi-btn ${tone}" data-obs-errors aria-label="Error rate ${rate.toFixed(1)}%, ${nf(s.errors)} of ${nf(s.requests)} requests failed. Show the failed traces">
+        <span>Error rate</span><b>${rate.toFixed(1)}%</b><small>${nf(s.errors)} of ${nf(s.requests)} requests</small><small class="kpi-go">Show failed traces ${icon('chevron', 'sm')}</small></button>`
+    : `<div class="kpi"><span>Error rate</span><b>${s.requests ? rate.toFixed(1) + '%' : '—'}</b><small>${nf(s.errors)} of ${nf(s.requests)} requests</small></div>`;
   renderStable($('#obsKpis'), `<div class="kpis">
     <div class="kpi"><span>Requests, 24 h</span><b>${nf(s.requests)}</b><small>${nf(s.traces)} traces · ${nf(s.errors)} failed</small></div>
     <div class="kpi"><span>p95 latency</span><b>${esc(dur(s.p95_ms))}</b><small>Median ${esc(dur(s.p50_ms))} · entry spans</small></div>
-    <div class="kpi ${rate >= 5 ? 'tone-bad' : rate >= 1 ? 'tone-warn' : ''}"><span>Error rate</span><b>${s.requests ? rate.toFixed(1) + '%' : '—'}</b><small>${nf(s.errors)} of ${nf(s.requests)} requests</small></div>
+    ${errTile}
     <div class="kpi"><span>Tokens, 24 h</span><b>${esc(compactN(s.tokens_in + s.tokens_out))}</b><small>${nf(s.tokens_in)} in · ${nf(s.tokens_out)} out</small></div>
     <div class="kpi"><span>Est. cost, 24 h</span><b>${esc(usd(s.est_cost_usd))}</b><small>Estimate at list prices</small></div>
   </div>`);
@@ -257,7 +286,7 @@ function renderObs(o, traces) {
       detail: `config ${c.config_hash}${c.model ? ` · model ${c.model}` : ''}` })),
   }, tkAny ? '' : emptyState('usage', 'No agent replies in the last 14 days', 'Token counts appear once participants chat with the agent.'));
 
-  renderTraces(traces);
+  renderTraces(list);
   renderDrift(o.drift.metrics);
 }
 
@@ -272,10 +301,13 @@ function obsChart(el, kind, opts, empty) {
 
 // The newest 10 by default (50 cards is a long scroll on a phone); one button shows the rest.
 const TRACES_SHOWN = 10;
-function renderTraces(traces) {
-  Widgets.obsTraces = traces;
-  const all = traces;
-  traces = Widgets.obsAllTraces ? all : all.slice(0, TRACES_SHOWN);
+function renderTraces(list) {
+  if (!list || list.status !== obsTraceFilter()) return;   // a response for the filter that was just switched away from
+  Widgets.obsTraceList = list;
+  const errorsOnly = list.status === 'errors', hours = +list.hours || OBS_HOURS;
+  $('#obsTracesTag').textContent = `${errorsOnly ? 'Failed · ' : ''}Newest ${OBS_TRACE_LIMIT} · last ${hours} h`;
+  const all = list.traces;
+  const traces = Widgets.obsAllTraces ? all : all.slice(0, TRACES_SHOWN);
   renderStable($('#obsTraces'), traces.length ? `<div class="table-wrap"><table class="data-table rows-link obs-traces">
     <thead><tr><th scope="col">Started</th><th scope="col">Entry point</th><th scope="col" class="r" title="How long the entry span took (the whole trace, queue and agent included, is in its waterfall)">Entry span</th>
       <th scope="col" class="r">Spans</th><th scope="col" class="r">Tokens</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
@@ -290,7 +322,8 @@ function renderTraces(traces) {
       <td data-label="Status">${spanStatus(t.status)}</td>
       <td class="actions-cell go-cell" aria-hidden="true">${icon('chevron', 'sm')}</td></tr>`; }).join('')}</tbody></table></div>`
     + (all.length > TRACES_SHOWN ? `<div class="obs-more"><button type="button" class="small" data-obs-more>${Widgets.obsAllTraces ? `Show the newest ${TRACES_SHOWN}` : `Show all ${all.length}`}</button></div>` : '')
-    : emptyState('activity', 'No traces yet', 'Send a WhatsApp message or chat on the participant site, and its trace appears here within a few seconds.'));
+    : errorsOnly ? emptyState('check', 'No failed traces', `Nothing failed in the last ${hours} hours.`, '<button type="button" class="small" data-obs-all>Show all traces</button>')
+      : emptyState('activity', 'No traces yet', 'Send a WhatsApp message or chat on the participant site, and its trace appears here within a few seconds.'));
 }
 
 async function openTrace(id) {
@@ -302,8 +335,8 @@ async function openTrace(id) {
   $('#obsTraceMeta').innerHTML = '';
   $('#obsWaterfall').innerHTML = skeleton(5);
   if (!sheet.open) sheet.showModal();
-  let spans;
-  try { ({ spans } = await api('GET', `/staff/observability/traces/${encodeURIComponent(id)}`)); } catch { spans = null; }
+  let spans, pid;
+  try { ({ spans, participant_id: pid } = await api('GET', `/staff/observability/traces/${encodeURIComponent(id)}`)); } catch { spans = null; }
   if (Widgets.obsTrace !== id) return;
   if (!spans) { $('#obsWaterfall').innerHTML = emptyState('alert', 'Unable to load this trace', 'Close this card and try again.'); return; }
   if (!spans.length) { $('#obsWaterfall').innerHTML = emptyState('search', 'Trace not found', 'It may be older than the retention window. Choose another trace.'); return; }
@@ -314,7 +347,7 @@ async function openTrace(id) {
   const queue = route ? at(route) - at(ingest) - (+ingest.duration_ms || 0) : null;
   const tok = spans.filter(s => s.name === 'agent.invoke')
     .reduce((n, s) => n + (+s.attrs?.['gen_ai.usage.input_tokens'] || 0) + (+s.attrs?.['gen_ai.usage.output_tokens'] || 0), 0);
-  const errs = spans.filter(s => s.status === 'ERROR').length;
+  const failed = spans.filter(s => s.status === 'ERROR'), errs = failed.length;
   $('#obsTraceTitle').textContent = ROOT_LABEL[root.name] || root.name;
   $('#obsTraceMeta').innerHTML = `<div class="kpis obs-trace-kpis">
       <div class="kpi"><span>Total time</span><b>${esc(dur(t1 - t0))}</b><small>${esc(stampFmt.format(t0))}</small></div>
@@ -322,8 +355,23 @@ async function openTrace(id) {
       <div class="kpi"><span>Tokens</span><b>${tok ? nf(tok) : '—'}</b><small>${nf(spans.length)} spans</small></div>
       <div class="kpi ${errs ? 'tone-bad' : ''}"><span>Status</span><b>${errs ? `${errs} error${errs === 1 ? '' : 's'}` : 'OK'}</b><small>${esc(root.service)}</small></div>
     </div>
-    <p class="panel-note obs-trace-id">Trace <span class="num">${esc(id)}</span>${spans.some(s => s.attrs?.['trialtalk.synthetic']) ? ' <span class="tag">Synthetic demo data</span>' : ''}</p>`;
+    <p class="panel-note obs-trace-id">Trace <span class="num">${esc(id)}</span>${spans.some(s => s.attrs?.['trialtalk.synthetic']) ? ' <span class="tag">Synthetic demo data</span>' : ''}
+      ${pid ? `<a class="btn small obs-pid" href="#/participants/${esc(encodeURIComponent(pid))}">Open participant <span class="num">${esc(pid)}</span>${icon('arrow', 'sm')}</a>` : ''}</p>
+    ${errs ? failureCallout(failed, t0) : ''}`;
   ttCharts.waterfall($('#obsWaterfall'), { spans });
+}
+
+// Where a trace failed: each ERROR span with when it started, how long it ran and any HTTP status it recorded. Spans
+// store no error message (it could carry participant text), so this says where it failed, never a made-up why.
+function failureCallout(failed, t0) {
+  const at = s => Math.max(0, Date.parse(s.start_ts) - t0);
+  return `<div class="callout tone-bad obs-fail" role="note">${icon('alert')}<div class="body">
+    <b>Where it failed</b>
+    <ul class="obs-fail-list">${failed.map(s => { const code = s.attrs?.['http.response.status_code'];
+      return `<li><button type="button" class="obs-fail-item" data-wf-span="${esc(s.span_id)}" aria-label="Show ${esc(s.name)} in the timeline">
+        <span class="obs-fail-name">${esc(s.name)}</span>
+        <span class="obs-fail-meta"><span class="tag">${esc(s.service)}</span>starts at +${esc(dur(at(s)))} · ran ${esc(dur(+s.duration_ms || 0))}${code != null ? ` · HTTP ${esc(code)}` : ''}</span></button></li>`; }).join('')}</ul>
+    <small>Traces record that a step failed, not the error message, so no message text is stored with them.</small></div></div>`;
 }
 
 // Drift: one card per measure, today against the week before. The badge's colour says whether the move is in the bad
@@ -467,8 +515,17 @@ function wireWidgets() {
   $('#usageDays').onchange = loadUsage;
   $('#obsRefresh').onclick = () => loadObs(true);
   $('#obsTraceClose').onclick = () => openTrace(null);
+  $('#obsTraceFilter').onclick = e => { const b = e.target.closest('[data-errors]'); if (b) setTraceFilter(b.dataset.errors === '1'); };
+  $('#obsKpis').addEventListener('click', e => { if (e.target.closest('[data-obs-errors]')) showFailedTraces(); });
+  $('#obsTraceMeta').addEventListener('click', e => {
+    const b = e.target.closest('[data-wf-span]'); if (!b) return;
+    const row = $(`#obsWaterfall [data-span="${CSS.escape(b.dataset.wfSpan)}"]`); if (!row) return;
+    row.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
+    row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+  });
   $('#obsTraces').addEventListener('click', e => {
-    if (e.target.closest('[data-obs-more]')) { Widgets.obsAllTraces = !Widgets.obsAllTraces; renderTraces(Widgets.obsTraces || []); return; }
+    if (e.target.closest('[data-obs-all]')) { setTraceFilter(false); return; }
+    if (e.target.closest('[data-obs-more]')) { Widgets.obsAllTraces = !Widgets.obsAllTraces; renderTraces(Widgets.obsTraceList); return; }
     const row = e.target.closest('tr[data-trace]');
     if (row) openTrace(row.dataset.trace);
   });

@@ -307,7 +307,8 @@
       const s = r.span, t = r.queue ? r.t : s.t, d = r.queue ? r.d : s.d;
       const kind = r.queue ? 'queue' : s.status === 'ERROR' ? 'error' : stageOf(s);
       const left = ((t - start) / total) * 100, width = (d / total) * 100;
-      const li = html('li', { class: `wf-row${r.queue ? ' is-queue' : ''}` }, list);
+      const li = html('li', { class: `wf-row${r.queue ? ' is-queue' : s.status === 'ERROR' ? ' is-error' : ''}` }, list);
+      if (!r.queue) li.dataset.span = s.span_id;
       li.style.setProperty('--depth', r.depth);
       const lab = html('div', { class: 'wf-label' }, li);
       html('b', { text: r.queue ? 'Queue wait' : s.name }, lab);

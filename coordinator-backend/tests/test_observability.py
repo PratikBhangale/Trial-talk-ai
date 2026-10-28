@@ -49,6 +49,29 @@ def test_drift_bad_direction_labels():
     assert all(m["bad_direction"] in ("up", "down", "none") and m["label"] for m in rows)
 
 
+def test_pid_from_session_strict_formats():
+    from staff_api.observability import pid_from_session as pid
+    # the router: "trialtalk-wa-<pid>-<local day>" right-padded with "0" to exactly 33 characters
+    assert pid("trialtalk-wa-P-0142-2026-10-28".ljust(33, "0")) == "P-0142"
+    assert pid("trialtalk-wa-P-0142-2026-10-20000") == "P-0142"     # a day ending in 0, then the padding
+    assert pid("trialtalk-wa-P-10001-2026-10-28".ljust(33, "0")) == "P-10001"
+    assert pid("trialtalk-wa-P-1234567-2026-10-28") == "P-1234567"  # already 33: no padding
+    # the participant site's web chat: "web-<pid>-<local day>", stored unpadded
+    assert pid("web-P-0142-2026-10-28") == "P-0142"
+    for bad in (None, 42, "", "P-0142", "synthetic-0123456789ab",
+                "trialtalk-wa-demo-0123456789ab-2026-10-28",            # demo users name no participant
+                "trialtalk-wa-P-0142-2026-10-28",                       # router sessions are always padded to 33
+                "trialtalk-wa-P-0142-2026-10-280000",                   # padded past 33
+                "trialtalk-wa-P-1234567-2026-10-280",                   # padded although already 33
+                "web-P-0142-2026-10-28000",                             # web sessions are never padded
+                "web-P-0142-2026-13-01", "web-P-0142-2026-02-30",       # not a calendar day
+                "web-p-0142-2026-10-28", "WEB-P-0142-2026-10-28", "web-P-01a2-2026-10-28", "web-P--2026-10-28",
+                "web-P-0142-26-10-28", " web-P-0142-2026-10-28", "web-P-0142-2026-10-28\n",
+                "web-P-0142-2026-10-28-x", "web-P-0142-2026-10-28' OR 1=1", "whatsapp-session-P-0142".ljust(33, "0"),
+                "web-P-0142-2026-10-28" + "0" * 60):
+        assert pid(bad) is None, bad
+
+
 # ------------------------------------------------------------------ endpoints
 
 INSERT_SPAN = ("INSERT INTO trial.telemetry_spans (span_id, trace_id, parent_id, name, service, kind, start_ts, "
@@ -260,7 +283,8 @@ def test_empty_db_returns_zeros_not_500(call_staff, spans):
     assert len(body["series"]["tokens"]) == 14 and all(d["input_tokens"] == 0 for d in body["series"]["tokens"])
     assert all(m["current"] is None and m["change_pct"] is None for m in body["drift"]["metrics"])
     assert body["drift"]["config_changes"] == []
-    assert call_staff("GET", "/staff/observability/traces") == (200, {"traces": []})
+    assert call_staff("GET", "/staff/observability/traces") == (200, {"traces": [], "hours": 24, "status": "all"})
+    assert call_staff("GET", "/staff/observability/traces", query={"status": "errors"})[1]["traces"] == []
     assert call_staff("GET", f"/staff/observability/traces/{T_OK}") == (200, {"spans": []})
 
 
@@ -284,3 +308,139 @@ def test_requires_ops_read(call_staff, spans):
             assert call_staff("GET", path, claims=STAFF_CLAIMS)[0] == 403
     finally:
         auth.PERMISSIONS["coordinator"] = saved
+
+
+# ------------------------------------------------------------------ drill-down: errors filter, time bound, participant
+
+
+def test_traces_errors_filter(call_staff, spans):
+    _seed(spans)
+    child_err = "9" * 32  # root OK, the failure is on a child span: still an error trace
+    _span(spans, "c-root", child_err, None, "whatsapp.ingest", 40, 50.0, service="ingest")
+    _span(spans, "c-invoke", child_err, "c-root", "agent.invoke", 40, 40.0, status="ERROR", service="agent")
+    status, body = call_staff("GET", "/staff/observability/traces", query={"status": "errors"})
+    assert status == 200, body
+    assert body["status"] == "errors" and body["hours"] == 24
+    assert [t["trace_id"] for t in body["traces"]] == [T_ERR, child_err]  # newest first, OK traces filtered out
+    assert all(t["status"] == "ERROR" for t in body["traces"])
+    everything = call_staff("GET", "/staff/observability/traces", query={"status": "all"})[1]["traces"]
+    assert {t["trace_id"] for t in everything} == {T_OK, T_ERR, child_err}
+    # the limit applies after the filter: the newest error trace, not the newest trace
+    assert [t["trace_id"] for t in call_staff("GET", "/staff/observability/traces",
+                                              query={"status": "errors", "limit": "1"})[1]["traces"]] == [T_ERR]
+    # the list and the error KPI count the same traces
+    assert call_staff("GET", "/staff/observability")[1]["summary"]["errors"] == len(body["traces"])
+    assert call_staff("GET", "/staff/observability/traces", query={"status": "failed"})[0] == 400
+
+
+def test_traces_time_bound(call_staff, spans):
+    _seed(spans)
+    old, old_err = "1" * 32, "2" * 32
+    _span(spans, "o-root", old, None, "whatsapp.route", 30 * 60, 100.0, service="router")          # 30 h ago
+    _span(spans, "oe-root", old_err, None, "whatsapp.route", 100 * 60, 100.0, status="ERROR")       # 100 h ago
+    _span(spans, "ancient", "3" * 32, None, "whatsapp.route", 200 * 60, 100.0, service="router")    # 200 h ago
+
+    def ids(**q):
+        status, body = call_staff("GET", "/staff/observability/traces", query=q or None)
+        assert status == 200, body
+        return body["hours"], {t["trace_id"] for t in body["traces"]}
+
+    assert ids() == (24, {T_OK, T_ERR})                                    # default: the last 24 hours
+    assert ids(hours="48") == (48, {T_OK, T_ERR, old})
+    assert ids(hours="999") == (168, {T_OK, T_ERR, old, old_err})          # clamped to 7 days
+    assert ids(hours="0") == (1, {T_OK, T_ERR})                            # clamped to 1 hour
+    assert ids(hours="168", status="errors") == (168, {T_ERR, old_err})
+    assert call_staff("GET", "/staff/observability/traces", query={"hours": "x"})[0] == 400
+
+
+def test_trace_root_before_window_stays_out(call_staff, spans):
+    # A trace whose root started before the window is not listed even if a later span falls inside it (the KPIs'
+    # rule), and the one-root-per-trace rule still holds for the traces that are listed.
+    straddle = "4" * 32
+    _span(spans, "s-root", straddle, None, "whatsapp.route", 61, 100.0, service="router")
+    _span(spans, "s-late", straddle, "s-root", "agent.invoke", 59, 100.0, service="agent")
+    assert call_staff("GET", "/staff/observability/traces", query={"hours": "1"})[1]["traces"] == []
+    (row,) = call_staff("GET", "/staff/observability/traces", query={"hours": "2"})[1]["traces"]
+    assert (row["trace_id"], row["root_name"], row["span_count"]) == (straddle, "whatsapp.route", 2)
+
+
+def _enroll(call_staff, name, phone, site="RIVERSIDE"):
+    status, body = call_staff("POST", "/staff/participants", {
+        "full_name": name, "phone_e164": phone, "study_id": "KOA-301", "site_id": site})
+    assert status == 201, body
+    return body["participant"]["participant_id"]
+
+
+def _reply_row(admin, pid, session, at, tin=None, tout=None):
+    admin.execute("INSERT INTO trial.communications (participant_id, channel, direction, msg_type, body_text, "
+                  "session_id, input_tokens, output_tokens, created_at) "
+                  "VALUES (%s, 'whatsapp', 'outbound', 'text', 'reply', %s, %s, %s, %s)",
+                  (pid, session, tin, tout, at))
+
+
+def _agent_trace(admin, trace, ago_min, tin=120, tout=45, prefix="t"):
+    """A WhatsApp routing trace: a 6 s routing span with an agent.invoke inside it. Returns the root's start."""
+    start = datetime.now(timezone.utc) - timedelta(minutes=ago_min)
+    admin.execute(INSERT_SPAN, (f"{prefix}-root", trace, None, "whatsapp.route", "router", "CONSUMER", start, 6000.0,
+                                "OK", "{}"))
+    admin.execute(INSERT_SPAN, (f"{prefix}-invoke", trace, f"{prefix}-root", "agent.invoke", "trial-agent", "SERVER",
+                                start + timedelta(milliseconds=200), 5000.0, "OK",
+                                json.dumps({"gen_ai.usage.input_tokens": tin, "gen_ai.usage.output_tokens": tout})))
+    return start
+
+
+def _wa_session(pid, at):
+    return f"trialtalk-wa-{pid}-{at:%Y-%m-%d}".ljust(33, "0")
+
+
+def test_trace_participant_resolved_inside_window(call_staff, spans):
+    pid = _enroll(call_staff, "Maria Lopez", "+17325550142")
+    linked, outside, demo = "a1" * 16, "b2" * 16, "c3" * 16
+    start = _agent_trace(spans, linked, 10, prefix="l")
+    _reply_row(spans, pid, _wa_session(pid, start), start + timedelta(seconds=5.5), 120, 45)
+    # the participant's own inbound (no tokens) in the same window does not change the answer
+    _reply_row(spans, pid, _wa_session(pid, start), start + timedelta(seconds=0.1))
+    status, body = call_staff("GET", f"/staff/observability/traces/{linked}")
+    assert status == 200, body
+    assert body["participant_id"] == pid and len(body["spans"]) == 2
+
+    # a reply logged well after the trace ended is not a match
+    start = _agent_trace(spans, outside, 30, prefix="o")
+    _reply_row(spans, pid, _wa_session(pid, start), start + timedelta(seconds=40), 120, 45)
+    status, body = call_staff("GET", f"/staff/observability/traces/{outside}")
+    assert status == 200 and body["spans"] and "participant_id" not in body
+
+    # a session that names no participant (demo user), or names another participant than the row's, is not a match
+    start = _agent_trace(spans, demo, 50, prefix="d")
+    _reply_row(spans, pid, "trialtalk-wa-demo-0123456789ab-" + f"{start:%Y-%m-%d}", start + timedelta(seconds=3),
+               120, 45)
+    _reply_row(spans, pid, _wa_session("P-9999", start), start + timedelta(seconds=3), 120, 45)
+    assert "participant_id" not in call_staff("GET", f"/staff/observability/traces/{demo}")[1]
+
+
+def test_trace_participant_needs_matching_tokens_and_one_participant(call_staff, spans):
+    maria = _enroll(call_staff, "Maria Lopez", "+17325550142")
+    sam = _enroll(call_staff, "Sam Okafor", "+17325550143")
+    both, tokens = "d4" * 16, "e5" * 16
+    # two participants' replies inside one trace window with the same token counts: ambiguous, so no link
+    start = _agent_trace(spans, both, 10, prefix="b")
+    _reply_row(spans, maria, _wa_session(maria, start), start + timedelta(seconds=5), 120, 45)
+    _reply_row(spans, sam, f"web-{sam}-{start:%Y-%m-%d}", start + timedelta(seconds=5.2), 120, 45)
+    assert "participant_id" not in call_staff("GET", f"/staff/observability/traces/{both}")[1]
+    # the trace's token counts pick the right reply when another participant's falls in the window too
+    start = _agent_trace(spans, tokens, 30, tin=700, tout=90, prefix="t")
+    _reply_row(spans, maria, _wa_session(maria, start), start + timedelta(seconds=5), 120, 45)
+    _reply_row(spans, sam, f"web-{sam}-{start:%Y-%m-%d}", start + timedelta(seconds=5.2), 700, 90)
+    assert call_staff("GET", f"/staff/observability/traces/{tokens}")[1]["participant_id"] == sam
+
+
+def test_trace_participant_is_site_scoped(call_staff, spans):
+    from conftest import OTHER_SITE_CLAIMS
+    pid = _enroll(call_staff, "Maria Lopez", "+17325550142")   # a RIVERSIDE participant
+    trace = "f6" * 16
+    start = _agent_trace(spans, trace, 10)
+    _reply_row(spans, pid, _wa_session(pid, start), start + timedelta(seconds=5), 120, 45)
+    assert call_staff("GET", f"/staff/observability/traces/{trace}")[1]["participant_id"] == pid
+    status, body = call_staff("GET", f"/staff/observability/traces/{trace}", claims=OTHER_SITE_CLAIMS)
+    assert status == 200, body
+    assert len(body["spans"]) == 2 and "participant_id" not in body   # spans are PHI-free; the link is not
