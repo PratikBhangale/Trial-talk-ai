@@ -34,6 +34,16 @@ SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
 BUTTON_ACTIONS = {"taken": "TAKEN", "skipped": "SKIPPED"}
 # Not offered on reminders, even if the reminder row lists it.
 HIDDEN_BUTTONS = {"remind me in 30 min"}
+# How many body parameters Meta approved for each template. Meta rejects a send with a different count (error
+# 132000) only after accepting it, so extra values are dropped here. dose_reminder_v2 was approved with only {{1}}
+# (the dose label), so the dose instructions ({{2}}) are not part of the WhatsApp message.
+TEMPLATE_BODY_PARAMS = {"dose_reminder_v2": 1}
+
+
+def template_body_params(template_name, params):
+    """The reminder's template_params ({"1": ..., "2": ...}) in order, cut to what Meta approved for the template."""
+    values = [params[k] for k in sorted(params, key=lambda k: int(k) if k.isdigit() else k)]
+    return values[:TEMPLATE_BODY_PARAMS.get(template_name)]   # None = no limit
 
 
 def handler(event, context):
@@ -89,7 +99,7 @@ def send(reminder_id, snooze=False, manual=False):
         return {"result": "skipped", "why": "past ends_on"}
 
     params = json.loads(r["template_params"])
-    body_params = [params[k] for k in sorted(params, key=lambda k: int(k) if k.isdigit() else k)]
+    body_params = template_body_params(r["template_name"], params)
     titles = [b for b in (r["buttons"] or "").split("|") if b and b.lower() not in HIDDEN_BUTTONS]
     buttons = [(f"{BUTTON_ACTIONS.get(b.lower(), b.upper())}:{reminder_id}", b) for b in titles]
 
