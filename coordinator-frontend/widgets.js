@@ -1,14 +1,14 @@
-// Staff portal widgets: emergency alerts, OpenTelemetry, token usage and the team (staff accounts) page.
+// Staff portal widgets: emergency alerts, observability, token usage and the team (staff accounts) page.
 // They poll quietly (no request-log noise) while a staff user is signed in, and each shows when it last refreshed.
 
 const Widgets = { timers: [], alertScope: 'active', seen: null, baseTitle: document.title, open: 0, team: [], editing: null };
-const SELF_ROUTES = new Set(['GET /staff/alerts', 'GET /staff/observability']); // the widgets' own polling
 
 function startWidgets() {
   stopWidgets();
   Widgets.seen = null;
-  loadAlerts(); loadOtel(); loadTeam(); loadUsage();
-  Widgets.timers = [setInterval(loadAlerts, 4000), setInterval(loadOtel, 5000), setInterval(loadUsage, 15000)];
+  loadAlerts(); loadTeam(); loadUsage();
+  // Observability polls only while its page is open and the tab is visible: it is the heaviest query set.
+  Widgets.timers = [setInterval(loadAlerts, 4000), setInterval(() => obsActive() && loadObs(), 5000), setInterval(loadUsage, 15000)];
 }
 function stopWidgets() {
   Widgets.timers.forEach(clearInterval); Widgets.timers = [];
@@ -177,57 +177,179 @@ async function alertAction(action, id, name) {
   loadAlerts();
 }
 
-// ------------------------------------------------------------ OpenTelemetry
-async function loadOtel() {
-  if (!TT.user) return;
-  let o;
-  try { o = await api('GET', '/staff/observability', undefined, { quiet: true }); } catch { setLive('otelLive', false); return; }
-  setLive('otelLive', true);
-  const body = $('#otelBody');
-  if (!o.enabled) {
-    body.innerHTML = `<div class="callout tone-info">${icon('activity')}<div class="body"><b>OpenTelemetry is not active</b>
-      <span>${esc(o.reason)}. Install it with <code>pip install opentelemetry-sdk</code> and restart the dev server.</span></div></div>`;
-    return;
-  }
-  const showSelf = $('#otelSelf').checked;
-  const keep = (method, route) => showSelf || !SELF_ROUTES.has(`${method} ${route}`);
+// ------------------------------------------------------------ observability
+// One page over trial.telemetry_spans: KPIs, three charts, recent traces (each opens as a waterfall) and behavior drift.
+// Every number is an aggregate or a timing; nothing here names a participant. Costs are estimates at list prices.
+const usd = v => { v = +v || 0; return '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })); };
+const dur = v => v === null || v === undefined ? '—' : v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)} s` : `${Math.round(v)} ms`;
+const compactN = n => Number(n || 0) >= 10000 ? new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : nf(n);
+const ROOT_LABEL = { 'whatsapp.ingest': 'WhatsApp message', 'whatsapp.route': 'WhatsApp routing', 'whatsapp.legacy': 'WhatsApp (legacy)',
+  'agent.invoke': 'Agent reply', 'agent.call': 'Agent call', 'reminder.send': 'Reminder send', 'reconcile.run': 'Schedule reconcile' };
+const SPAN_STATUS = { OK: ['tone-ok', 'OK'], ERROR: ['tone-bad', 'Error'], UNSET: ['tone-neutral', 'Unset'] };
+const spanStatus = s => { const [tone, label] = SPAN_STATUS[s] || ['tone-neutral', humanize(s || 'unknown')];
+  return `<span class="pill ${tone}"><span class="dot"></span>${esc(label)}</span>`; };
+const hourFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric' });
+const stampFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const timeFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+// Token days are UTC days (that is how the API buckets them), so the change flags on that chart are stamped in UTC too.
+const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+const utcStampFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
 
-  // Metrics: http.server.request.duration histogram -> per-route rows
-  const hist = o.metrics.find(m => m.name === 'http.server.request.duration');
-  const rows = {};
-  for (const p of hist?.points || []) {
-    const a = p.attributes, method = a['http.request.method'], route = a['http.route'];
-    if (!keep(method, route)) continue;
-    const r = rows[`${method} ${route}`] ||= { route: `${method} ${route}`, requests: 0, errors5xx: 0, client4xx: 0, sum: 0, max: 0 };
-    r.requests += p.count; r.sum += p.sum; r.max = Math.max(r.max, p.max || 0);
-    const code = +a['http.response.status_code'];
-    if (code >= 500) r.errors5xx += p.count; else if (code >= 400) r.client4xx += p.count;
-  }
-  const list = Object.values(rows).sort((x, y) => y.requests - x.requests);
-  const total = list.reduce((n, r) => n + r.requests, 0), err = list.reduce((n, r) => n + r.errors5xx, 0);
-  const sum = list.reduce((n, r) => n + r.sum, 0), max = Math.max(0, ...list.map(r => r.max));
-  const errRate = total ? err / total * 100 : 0;
-  const counters = o.metrics.filter(m => m.kind === 'counter').flatMap(m => m.points.map(p => ({
-    metric: { __html: `<span class="num">${esc(m.name)}</span>` },
-    attributes: { __html: `<span class="tag-list">${Object.entries(p.attributes).map(([k, v]) => `<span class="tag">${esc(k)}=${esc(v)}</span>`).join('')}</span>` },
-    value: nf(p.value) })));
+// Polls only while the page is open and the tab is visible: these are the heaviest queries the portal makes.
+const obsActive = () => !!TT.user && state.page === 'observability' && !document.hidden;
 
+async function loadObs(loud) {
+  if (!TT.user || Widgets.obsBusy) return;
+  Widgets.obsBusy = true;
+  if (!Widgets.obsLoaded) ['#obsKpis', '#obsRequests', '#obsLatency', '#obsTokens', '#obsTraces', '#obsDrift']
+    .forEach(s => { if (!$(s).childElementCount) $(s).innerHTML = skeleton(3); });
+  try {
+    const [o, { traces }] = await Promise.all([
+      api('GET', '/staff/observability?hours=24', undefined, { quiet: !loud }),
+      api('GET', '/staff/observability/traces?limit=50', undefined, { quiet: !loud })]);
+    Widgets.obsLoaded = true;
+    setLive('obsLive', true);
+    renderObs(o, traces);
+  } catch { setLive('obsLive', false); }
+  finally { Widgets.obsBusy = false; }
+}
 
-  renderStable(body, `
-    <div class="kpis">
-      <div class="kpi"><span>Requests</span><b>${nf(total)}</b></div>
-      <div class="kpi ${err ? 'tone-bad' : 'tone-ok'}"><span>Error rate (5xx)</span><b>${errRate.toFixed(1)}%</b></div>
-      <div class="kpi"><span>Average latency</span><b>${total ? Math.round(sum / total * 1000) : 0} ms</b></div>
-      <div class="kpi"><span>Slowest request</span><b>${Math.round(max * 1000)} ms</b></div>
+function renderObs(o, traces) {
+  const s = o.summary, rate = s.error_rate * 100;
+  renderStable($('#obsKpis'), `<div class="kpis">
+    <div class="kpi"><span>Requests, 24 h</span><b>${nf(s.requests)}</b><small>${nf(s.traces)} traces · ${nf(s.errors)} failed</small></div>
+    <div class="kpi"><span>p95 latency</span><b>${esc(dur(s.p95_ms))}</b><small>Median ${esc(dur(s.p50_ms))} · entry spans</small></div>
+    <div class="kpi ${rate >= 5 ? 'tone-bad' : rate >= 1 ? 'tone-warn' : ''}"><span>Error rate</span><b>${s.requests ? rate.toFixed(1) + '%' : '—'}</b><small>${nf(s.errors)} of ${nf(s.requests)} requests</small></div>
+    <div class="kpi"><span>Tokens, 24 h</span><b>${esc(compactN(s.tokens_in + s.tokens_out))}</b><small>${nf(s.tokens_in)} in · ${nf(s.tokens_out)} out</small></div>
+    <div class="kpi"><span>Est. cost, 24 h</span><b>${esc(usd(s.est_cost_usd))}</b><small>Estimate at list prices</small></div>
+  </div>`);
+
+  // Requests: 15-minute buckets, stacked as succeeded + errors, so the bar height is all traffic.
+  const rq = o.series.requests, rqX = rq.map(b => Date.parse(b.t));
+  const rqTotal = rq.reduce((n, b) => n + b.count, 0), rqErr = rq.reduce((n, b) => n + b.errors, 0);
+  obsChart($('#obsRequests'), 'bars', {
+    x: rqX, step: 900000, stacked: true, integer: true, yLabel: 'Requests per 15 min',
+    label: `Requests per 15 minutes over the last 24 hours: ${rqTotal} requests, ${rqErr} errors.`,
+    series: [{ name: 'Succeeded', color: '--ch-1', values: rq.map(b => b.count - b.errors) },
+      { name: 'Errors', color: '--bad-solid', values: rq.map(b => b.errors) }],
+    xFormat: t => hourFmt.format(t), tipFormat: t => `${stampFmt.format(t)} – ${timeFmt.format(t + 900000)}`,
+  }, rqTotal ? '' : emptyState('activity', 'No requests in the last 24 hours', 'Each WhatsApp message, chat reply and scheduled job shows up here as it is processed.'));
+
+  const lt = o.series.latency, ltX = lt.map(b => Date.parse(b.t));
+  obsChart($('#obsLatency'), 'line', {
+    x: ltX, step: 3600000, yLabel: 'Duration', yFormat: dur,
+    label: `Hourly p95 and median duration of each trace's entry span over the last 24 hours. Overall p95 ${dur(s.p95_ms)}.`,
+    series: [{ name: 'p95', color: '--ch-1', values: lt.map(b => b.p95) }, { name: 'Median (p50)', color: '--ch-2', values: lt.map(b => b.p50) }],
+    xFormat: t => hourFmt.format(t), tipFormat: t => `${stampFmt.format(t)} – ${timeFmt.format(t + 3600000)}`,
+  }, lt.some(b => b.p95 !== null) ? '' : emptyState('clock', 'No timings yet', 'Response times appear once requests are traced.'));
+
+  // Tokens: 14 UTC days, stacked input + output, with a flag at each agent configuration change.
+  const tk = o.series.tokens, tkX = tk.map(d => Date.parse(d.day + 'T00:00:00Z'));
+  const cost = Object.fromEntries(tk.map((d, i) => [tkX[i], d.est_cost_usd]));
+  const tkCost = tk.reduce((n, d) => n + d.est_cost_usd, 0), tkAny = tk.some(d => d.input_tokens + d.output_tokens > 0);
+  $('#obsTokensTag').textContent = tkAny ? `14 days · est. ${usd(tkCost)}` : '14 days';
+  obsChart($('#obsTokens'), 'bars', {
+    x: tkX, step: 86400000, stacked: true, yLabel: 'Tokens per day', xTitle: 'Day',
+    label: `Input and output tokens per day over 14 days, estimated cost ${usd(tkCost)}. ${o.drift.config_changes.length} configuration changes.`,
+    series: [{ name: 'Input', color: '--ch-1', values: tk.map(d => d.input_tokens) }, { name: 'Output', color: '--ch-2', values: tk.map(d => d.output_tokens) }],
+    xFormat: t => dayFmt.format(t), tipFormat: t => `${dayFmt.format(t)} · est. ${usd(cost[t])}`,
+    markers: o.drift.config_changes.map(c => ({ at: Date.parse(c.at), label: `Agent config changed ${utcStampFmt.format(Date.parse(c.at))} UTC`,
+      detail: `config ${c.config_hash}${c.model ? ` · model ${c.model}` : ''}` })),
+  }, tkAny ? '' : emptyState('usage', 'No agent replies in the last 14 days', 'Token counts appear once participants chat with the agent.'));
+
+  renderTraces(traces);
+  renderDrift(o.drift.metrics);
+}
+
+// Charts redraw only when their data changed, so a 5 s poll never resets a tooltip someone is reading.
+function obsChart(el, kind, opts, empty) {
+  const key = JSON.stringify([kind, opts, empty]);
+  if (el._key === key) return;
+  el._key = key;
+  if (empty) { el._tt = null; el.className = ''; el.innerHTML = empty; return; }
+  ttCharts[kind](el, opts);
+}
+
+// The newest 10 by default (50 cards is a long scroll on a phone); one button shows the rest.
+const TRACES_SHOWN = 10;
+function renderTraces(traces) {
+  Widgets.obsTraces = traces;
+  const all = traces;
+  traces = Widgets.obsAllTraces ? all : all.slice(0, TRACES_SHOWN);
+  renderStable($('#obsTraces'), traces.length ? `<div class="table-wrap"><table class="data-table rows-link obs-traces">
+    <thead><tr><th scope="col">Started</th><th scope="col">Entry point</th><th scope="col" class="r" title="How long the entry span took (the whole trace, queue and agent included, is in its waterfall)">Entry span</th>
+      <th scope="col" class="r">Spans</th><th scope="col" class="r">Tokens</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
+    <tbody>${traces.map(t => { const id = esc(t.trace_id), label = ROOT_LABEL[t.root_name] || t.root_name;
+      return `<tr data-trace="${id}" ${t.trace_id === Widgets.obsTrace ? 'aria-current="true"' : ''}>
+      <td data-label="Started"><button type="button" class="row-link" aria-label="Open trace: ${esc(label)}, ${esc(ago(t.started_at))}">
+        <span class="who"><b>${esc(ago(t.started_at))}</b><span>${esc(stampFmt.format(Date.parse(t.started_at)))}</span></span></button></td>
+      <td data-label="Entry point"><span class="obs-entry"><b>${esc(label)}</b><span class="tag">${esc(t.service)}</span></span></td>
+      <td data-label="Entry span" class="r num">${esc(dur(t.duration_ms))}</td>
+      <td data-label="Spans" class="r num">${nf(t.span_count)}</td>
+      <td data-label="Tokens" class="r num">${t.tokens === null ? '<span class="muted">—</span>' : nf(t.tokens)}</td>
+      <td data-label="Status">${spanStatus(t.status)}</td>
+      <td class="actions-cell go-cell" aria-hidden="true">${icon('chevron', 'sm')}</td></tr>`; }).join('')}</tbody></table></div>`
+    + (all.length > TRACES_SHOWN ? `<div class="obs-more"><button type="button" class="small" data-obs-more>${Widgets.obsAllTraces ? `Show the newest ${TRACES_SHOWN}` : `Show all ${all.length}`}</button></div>` : '')
+    : emptyState('activity', 'No traces yet', 'Send a WhatsApp message or chat on the participant site, and its trace appears here within a few seconds.'));
+}
+
+async function openTrace(id) {
+  const sheet = $('#traceSheet');
+  Widgets.obsTrace = id;
+  $$('#obsTraces tr[data-trace]').forEach(r => r.dataset.trace === id ? r.setAttribute('aria-current', 'true') : r.removeAttribute('aria-current'));
+  if (!id) { if (sheet.open) sheet.close(); return; }
+  $('#obsTraceTitle').textContent = 'Trace';
+  $('#obsTraceMeta').innerHTML = '';
+  $('#obsWaterfall').innerHTML = skeleton(5);
+  if (!sheet.open) sheet.showModal();
+  let spans;
+  try { ({ spans } = await api('GET', `/staff/observability/traces/${encodeURIComponent(id)}`)); } catch { spans = null; }
+  if (Widgets.obsTrace !== id) return;
+  if (!spans) { $('#obsWaterfall').innerHTML = emptyState('alert', 'Unable to load this trace', 'Close this card and try again.'); return; }
+  if (!spans.length) { $('#obsWaterfall').innerHTML = emptyState('search', 'Trace not found', 'It may be older than the retention window. Choose another trace.'); return; }
+  const at = s => Date.parse(s.start_ts), root = spans.find(s => !s.parent_id) || spans[0];
+  const t0 = Math.min(...spans.map(at)), t1 = Math.max(...spans.map(s => at(s) + (+s.duration_ms || 0)));
+  const ingest = spans.find(s => s.name === 'whatsapp.ingest');
+  const route = ingest && spans.find(s => s.name === 'whatsapp.route' && s.parent_id === ingest.span_id);
+  const queue = route ? at(route) - at(ingest) - (+ingest.duration_ms || 0) : null;
+  const tok = spans.filter(s => s.name === 'agent.invoke')
+    .reduce((n, s) => n + (+s.attrs?.['gen_ai.usage.input_tokens'] || 0) + (+s.attrs?.['gen_ai.usage.output_tokens'] || 0), 0);
+  const errs = spans.filter(s => s.status === 'ERROR').length;
+  $('#obsTraceTitle').textContent = ROOT_LABEL[root.name] || root.name;
+  $('#obsTraceMeta').innerHTML = `<div class="kpis obs-trace-kpis">
+      <div class="kpi"><span>Total time</span><b>${esc(dur(t1 - t0))}</b><small>${esc(stampFmt.format(t0))}</small></div>
+      <div class="kpi"><span>Queue wait</span><b>${queue !== null && queue > 0 ? esc(dur(queue)) : '—'}</b><small>${queue !== null ? 'Ingest to router, on SQS' : 'Not queued'}</small></div>
+      <div class="kpi"><span>Tokens</span><b>${tok ? nf(tok) : '—'}</b><small>${nf(spans.length)} spans</small></div>
+      <div class="kpi ${errs ? 'tone-bad' : ''}"><span>Status</span><b>${errs ? `${errs} error${errs === 1 ? '' : 's'}` : 'OK'}</b><small>${esc(root.service)}</small></div>
     </div>
-    <p class="note" style="margin:0 0 16px">Service <span class="num">${esc(o.service)}</span> · ${o.otlp_export ? 'Also exporting over OTLP' : 'In-process window only. Set OTEL_EXPORTER_OTLP_ENDPOINT to export.'}</p>
-    <h3 class="sub">By route</h3>
-    ${table(list.map(r => ({ route: { __html: `<span class="num">${esc(r.route)}</span>` }, requests: nf(r.requests),
-      client_errors: r.client4xx ? { __html: `<span class="pill tone-warn"><span class="dot"></span>${nf(r.client4xx)}</span>` } : '0',
-      server_errors: r.errors5xx ? { __html: `<span class="pill tone-bad"><span class="dot"></span>${nf(r.errors5xx)}</span>` } : '0',
-      average: `${Math.round(r.sum / r.requests * 1000)} ms`, slowest: `${Math.round(r.max * 1000)} ms` })), null, null,
-      emptyState('activity', 'No requests yet', 'Use the portals and the request metrics appear here.'))}
-    ${counters.length ? `<h3 class="sub">Counters</h3>${table(counters)}` : ''}`);
+    <p class="panel-note obs-trace-id">Trace <span class="num">${esc(id)}</span>${spans.some(s => s.attrs?.['trialtalk.synthetic']) ? ' <span class="tag">Synthetic demo data</span>' : ''}</p>`;
+  ttCharts.waterfall($('#obsWaterfall'), { spans });
+}
+
+// Drift: one card per measure, today against the week before. The badge's colour says whether the move is in the bad
+// direction for that measure (red), an improvement (green), or a measure with no good direction (neutral).
+const DRIFT_FMT = { tokens_in_per_reply: v => nf(Math.round(v)), tokens_out_per_reply: v => nf(Math.round(v)), agent_p95_ms: dur,
+  reply_length_chars: v => nf(Math.round(v)), kb_search_rate: v => `${Math.round(v * 100)}%`, escalation_rate: v => `${(v * 100).toFixed(1)}%` };
+const DRIFT_UNIT = { tokens_in_per_reply: 'tokens', tokens_out_per_reply: 'tokens', reply_length_chars: 'characters' };
+function renderDrift(metrics) {
+  const any = metrics.some(m => m.current !== null || m.baseline !== null);
+  renderStable($('#obsDrift'), any ? `<div class="drift-grid">${metrics.map(m => {
+    const f = DRIFT_FMT[m.key] || nf, show = v => v === null ? '—' : f(v), c = m.change_pct;
+    let tone = 'tone-neutral', verdict = 'no better or worse direction';
+    if (c === null) verdict = 'no comparison';
+    else if (c === 0) verdict = 'unchanged';
+    else if (m.bad_direction !== 'none') {
+      const worse = (m.bad_direction === 'up') === (c > 0);
+      tone = worse ? 'tone-bad' : 'tone-ok'; verdict = worse ? 'worse' : 'better';
+    }
+    const badge = c === null ? `<span class="pill tone-neutral">${m.current === null ? 'No data today' : 'No baseline'}</span>`
+      : `<span class="pill ${tone}" title="${esc(humanize(verdict))}, compared with the 7 days before"><span aria-hidden="true">${c > 0 ? '▲' : c < 0 ? '▼' : '–'}</span>${esc(Math.abs(c).toFixed(1))}%<span class="sr-only">${c > 0 ? ' up' : c < 0 ? ' down' : ''}, ${esc(verdict)}</span></span>`;
+    return `<article class="drift-card">
+      <div class="drift-top"><h3>${esc(m.label.replace(/ \((ms|chars)\)$/, ''))}</h3>${badge}</div>
+      <b class="drift-now">${esc(show(m.current))}${m.current !== null && DRIFT_UNIT[m.key] ? `<small>${esc(DRIFT_UNIT[m.key])}</small>` : ''}</b>
+      <span class="drift-base">Baseline ${esc(show(m.baseline))}</span>
+    </article>`; }).join('')}</div>`
+    : emptyState('activity', 'Not enough history yet', 'Drift compares the last 24 hours with the 7 days before. It fills in once the agent has replied in both windows.'));
 }
 
 // ------------------------------------------------------------ token usage
@@ -245,14 +367,16 @@ async function loadUsage() {
       <div class="kpi"><span>Input</span><b>${nf(t.input_tokens)}</b></div>
       <div class="kpi"><span>Output</span><b>${nf(t.output_tokens)}</b></div>
       <div class="kpi"><span>Agent replies</span><b>${nf(t.calls)}</b></div>
+      <div class="kpi"><span>Est. cost</span><b>${esc(usd(t.est_cost_usd))}</b><small>Estimate at list prices</small></div>
     </div>
     <h3 class="sub">Tokens per day</h3>
     ${u.by_day.length ? usageChart(u.by_day) : emptyState('usage', 'No agent replies in this period', 'Token counts appear once participants chat with the agent.')}
     ${u.by_participant.length ? `<h3 class="sub">Top participants</h3>`
       + table(u.by_participant.map(p => ({ participant: { __html: `<a href="#/participants" data-pid="${esc(p.participant_id)}">${esc(p.full_name)}</a>` },
-        id: p.participant_id, site: humanize(String(p.site_id).toLowerCase()), input: nf(p.input_tokens), output: nf(p.output_tokens), replies: nf(p.calls) })),
-        ['participant', 'id', 'site', 'input', 'output', 'replies']) : ''}
-    <p class="note">These numbers come from the local fake agent. The deployed agent reports real counts.</p>`);
+        id: p.participant_id, site: humanize(String(p.site_id).toLowerCase()), input: nf(p.input_tokens), output: nf(p.output_tokens), replies: nf(p.calls),
+        est_cost: { __html: `<span class="num">${esc(usd(p.est_cost_usd))}</span>` } })),
+        ['participant', 'id', 'site', 'input', 'output', 'replies', 'est_cost']) : ''}
+    <p class="note">Costs are estimates from token counts at list prices ($3 per million input tokens, $15 per million output), not a bill. Locally the numbers come from the fake agent; the deployed agent reports real counts.</p>`);
 }
 
 // One row per day: the bar splits input (prompt) from output (reply) tokens and is scaled to the busiest day,
@@ -263,13 +387,13 @@ function usageChart(days) {
   return `<div class="table-wrap plain"><table class="bar-table">
       <thead><tr><th scope="col">Day</th>
         <th scope="col"><span class="chart-legend"><span><i class="lg-in"></i>Input (sent to the model)</span><span><i class="lg-out"></i>Output (the model's replies)</span></span></th>
-        <th scope="col" class="r">Total tokens</th></tr></thead>
+        <th scope="col" class="r">Total tokens</th><th scope="col" class="r">Est. cost</th></tr></thead>
       <tbody>${days.map(d => `<tr>
         <th scope="row">${esc(when(String(d.day).slice(0, 10)))}</th>
         <td><span class="sr-only">${nf(d.input_tokens)} input, ${nf(d.output_tokens)} output</span>
           <span class="hbar" aria-hidden="true" title="${nf(d.input_tokens)} input · ${nf(d.output_tokens)} output" style="width:${Math.max(2, total(d) / max * 100)}%">
             <i class="in" style="flex-grow:${+d.input_tokens}"></i><i class="out" style="flex-grow:${+d.output_tokens}"></i></span></td>
-        <td class="r num">${nf(total(d))}</td></tr>`).join('')}</tbody></table></div>
+        <td class="r num">${nf(total(d))}</td><td class="r num">${esc(usd(d.est_cost_usd))}</td></tr>`).join('')}</tbody></table></div>
     <p class="note">Bar length is relative to the busiest day, ${esc(when(String(busiest.day).slice(0, 10)))} (${nf(total(busiest))} tokens).</p>`;
 }
 
@@ -341,8 +465,20 @@ async function teamAction(action, username) {
 function wireWidgets() {
   $('#alertTabs').onclick = e => { const b = e.target.closest('[data-scope]'); if (b) { Widgets.alertScope = b.dataset.scope; loadAlerts(); } };
   $('#usageDays').onchange = loadUsage;
-  $('#otelSelf').onchange = loadOtel;
-  $('#otelRefresh').onclick = loadOtel;
+  $('#obsRefresh').onclick = () => loadObs(true);
+  $('#obsTraceClose').onclick = () => openTrace(null);
+  $('#obsTraces').addEventListener('click', e => {
+    if (e.target.closest('[data-obs-more]')) { Widgets.obsAllTraces = !Widgets.obsAllTraces; renderTraces(Widgets.obsTraces || []); return; }
+    const row = e.target.closest('tr[data-trace]');
+    if (row) openTrace(row.dataset.trace);
+  });
+  document.addEventListener('visibilitychange', () => obsActive() && loadObs());
+  // Closing the trace card (button, Esc or leaving the page) puts focus back on the row it was opened from.
+  $('#traceSheet').addEventListener('close', () => {
+    const was = Widgets.obsTrace; Widgets.obsTrace = null;
+    $$('#obsTraces tr[aria-current]').forEach(r => r.removeAttribute('aria-current'));
+    if (was && state.page === 'observability') $(`#obsTraces tr[data-trace="${CSS.escape(was)}"] .row-link`)?.focus();
+  });
   $('#inviteBtn').onclick = () => openTeamForm(null);
   $('#teamCancel').onclick = () => $('#teamFormWrap').classList.add('hidden');
   document.addEventListener('click', e => {
