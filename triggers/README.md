@@ -36,6 +36,17 @@ python triggers/infra/deploy.py --profile admin-ai-demo            # create or u
 
 It's safe to re-run after changing any Lambda code. Each Lambda gets its own IAM role, limited to the `tt_messaging` database login, the cluster, its own log group, and only the services it calls.
 
+Every zip also bundles the OpenTelemetry SDK, pip-installed from the pinned [`../infra-requirements-otel.txt`](../infra-requirements-otel.txt) (once per run, for the build Python resolving for 3.12 with `--only-binary=:all:`). The OTel wheels are pure Python, so building on an x86 or Apple laptop is fine for the arm64 Lambdas. Without the SDK in the zip, `common/telemetry.py` silently no-ops. Each function is also deployed with `TELEMETRY_DB_SINK=1`, which turns on the database span sink (it needs `DB_CLUSTER_ARN` and `DB_SECRET_ARN`, which are already set).
+
+The legacy `continuum-whatsapp` Lambda has no deploy script here (it was deployed by hand). It only gains telemetry if its zip is rebuilt with `common/telemetry.py` and the OTel deps; it is slated for replacement at cutover.
+
+### Tests
+
+```bash
+cd triggers && python -m pytest tests/        # a venv with opentelemetry-sdk==1.45.1 and pytest; boto3 is faked by conftest
+cd coordinator-backend && python -m pytest tests/test_deploy_zip.py   # zip packaging, no AWS and no pip
+```
+
 ## Switching on (cutover)
 
 `continuum-whatsapp` is also subscribed to `whatsapp_topic` and replies to every message. To avoid double replies, **`tt-ingest` only logs; forwarding to the router is off** until cutover:

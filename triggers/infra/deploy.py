@@ -13,6 +13,9 @@ import argparse
 import io
 import json
 import pathlib
+import subprocess
+import sys
+import tempfile
 import time
 import zipfile
 
@@ -34,6 +37,8 @@ GROUP = "trialtalk"
 QUEUE, DLQ = "tt-inbound.fifo", "tt-inbound-dlq.fifo"
 SCHEDULER_ROLE = "tt-scheduler-invoke"
 LAMBDA_DIR = pathlib.Path(__file__).resolve().parent.parent / "lambdas"
+OTEL_REQUIREMENTS = pathlib.Path(__file__).resolve().parents[2] / "infra-requirements-otel.txt"
+TELEMETRY_ENV = {"TELEMETRY_DB_SINK": "1"}   # the DB span sink also needs DB_CLUSTER_ARN + DB_SECRET_ARN (already set)
 
 FUNCTIONS = {
     #  name           timeout  extra permissions (beyond logs, Data API and the tt_messaging secret)
@@ -100,23 +105,51 @@ def ensure_role(iam, name, service, policy, condition=None):
     return arn, created
 
 
-def package(name):
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.write(LAMBDA_DIR / name.removeprefix("tt-") / "handler.py", "handler.py")
-        for f in (LAMBDA_DIR / "common").glob("*.py"):
-            z.write(f, f.name)
-    return buf.getvalue()
+def install_otel_deps(staging):
+    """pip install the pinned OTel SDK into `staging`. Pure-python wheels, resolved for the Lambda runtime (3.12)
+    whatever Python runs this script, so the build host's architecture does not matter."""
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
+                    "--python-version", "3.12", "--implementation", "cp", "--only-binary=:all:",
+                    "-r", str(OTEL_REQUIREMENTS), "-t", str(staging)], check=True)
 
 
-def ensure_function(lam, logs, name, role_arn, timeout, env):
+def bundle(zip_path, files, deps_dir=None):
+    """Write `zip_path` from `files` ((name in zip, source path) pairs) plus the OTel SDK. `deps_dir` is an
+    already-installed staging folder (deploy.py builds one per run and reuses it for every function)."""
+    zip_path = pathlib.Path(zip_path)
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        if deps_dir is None:
+            deps_dir = pathlib.Path(tmp) / "deps"
+            install_otel_deps(deps_dir)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+            for arc, src in files:
+                z.write(src, arc)
+            for f in sorted(pathlib.Path(deps_dir).rglob("*")):
+                rel = f.relative_to(deps_dir)
+                if f.is_file() and "__pycache__" not in rel.parts:
+                    z.write(f, rel.as_posix())
+    return zip_path
+
+
+def build_zip(name, out_dir, deps_dir=None):
+    """The zip for one trigger Lambda (flat: handler.py + common/*.py + the OTel SDK) at out_dir/<name>.zip."""
+    files = [("handler.py", LAMBDA_DIR / name.removeprefix("tt-") / "handler.py")]
+    files += [(f.name, f) for f in sorted((LAMBDA_DIR / "common").glob("*.py"))]
+    return bundle(pathlib.Path(out_dir) / f"{name}.zip", files, deps_dir)
+
+
+def ensure_function(lam, logs, name, role_arn, timeout, env, deps_dir=None):
     try:
         logs.create_log_group(logGroupName=f"/aws/lambda/{name}", tags={"project": "trialtalk"})
     except logs.exceptions.ResourceAlreadyExistsException:
         pass
     logs.put_retention_policy(logGroupName=f"/aws/lambda/{name}", retentionInDays=30)
-    code, cfg = package(name), dict(Role=role_arn, Handler="handler.handler", Runtime="python3.12",
-                                    Timeout=timeout, MemorySize=256, Environment={"Variables": env})
+    with tempfile.TemporaryDirectory() as out:
+        code = build_zip(name, out, deps_dir).read_bytes()
+    cfg = dict(Role=role_arn, Handler="handler.handler", Runtime="python3.12",
+                                    Timeout=timeout, MemorySize=256,
+               Environment={"Variables": {**env, **TELEMETRY_ENV}})
     for attempt in range(10):          # a new IAM role takes a few seconds to become assumable
         try:
             lam.create_function(FunctionName=name, Code={"ZipFile": code}, Architectures=["arm64"],
@@ -190,8 +223,10 @@ def main():
         "tt-reminder": common,
         "tt-reconcile": {**common, "DRY_RUN": "1"},
     }
-    for name, (timeout, _) in FUNCTIONS.items():
-        ensure_function(lam, logs, name, roles[name], timeout, env[name])
+    with tempfile.TemporaryDirectory() as deps_dir:   # pip once, reuse for every function
+        install_otel_deps(deps_dir)
+        for name, (timeout, _) in FUNCTIONS.items():
+            ensure_function(lam, logs, name, roles[name], timeout, env[name], deps_dir)
 
     print("triggers")
     try:

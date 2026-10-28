@@ -13,17 +13,17 @@ participant_api, so POST /staff/participants (which also creates the participant
 Needs: pip install boto3 "botocore[crt]"
 """
 import argparse
-import io
 import json
 import pathlib
 import sys
+import tempfile
 import time
-import zipfile
 
 import boto3
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "triggers" / "infra"))
-from deploy import ACCOUNT, ARN, CLUSTER_ARN, GROUP, REGION, SCHEDULER_ROLE, ensure_role, fn_arn
+from deploy import (ACCOUNT, ARN, CLUSTER_ARN, GROUP, REGION, SCHEDULER_ROLE, TELEMETRY_ENV, bundle, ensure_role,
+                    fn_arn)
 
 PORTAL_SECRET_ARN = f"arn:aws:secretsmanager:{ARN}:secret:trialtalk/db/tt_portal-VwDkdB"
 CODE_DIR = pathlib.Path(__file__).resolve().parent.parent / "lambdas"
@@ -39,14 +39,15 @@ FIRST_STAFF = {"email": "divya.shah7999@gmail.com", "name": "Divya Shah", "group
 TAGS = {"project": "trialtalk"}
 
 
-def package():
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in CODE_DIR.rglob("*.py"):
-            rel = f.relative_to(CODE_DIR)
-            if "__pycache__" not in rel.parts and rel.parts[0] != "migrate":
-                z.write(f, rel.as_posix())
-    return buf.getvalue()
+def build_zip(out_dir, deps_dir=None):
+    """The one zip every portal Lambda shares (lambdas/ as is, minus migrate/, plus the OTel SDK) at
+    out_dir/tt-portal.zip."""
+    files = []
+    for f in sorted(CODE_DIR.rglob("*.py")):
+        rel = f.relative_to(CODE_DIR)
+        if "__pycache__" not in rel.parts and rel.parts[0] != "migrate":
+            files.append((rel.as_posix(), f))
+    return bundle(pathlib.Path(out_dir) / "tt-portal.zip", files, deps_dir)
 
 
 def ensure_function(lam, logs, name, role_arn, handler, timeout, env, code):
@@ -197,7 +198,8 @@ def main():
     s = boto3.Session(profile_name=args.profile, region_name=REGION)
     iam, lam, logs, idp, apigw, cw = (s.client(c) for c in
                                       ("iam", "lambda", "logs", "cognito-idp", "apigatewayv2", "cloudwatch"))
-    code = package()
+    with tempfile.TemporaryDirectory() as out:
+        code = build_zip(out).read_bytes()
     sched_role_arn = f"arn:aws:iam::{ACCOUNT}:role/{SCHEDULER_ROLE}"
     log_stmt = lambda name: {"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
                              "Resource": f"arn:aws:logs:{ARN}:log-group:/aws/lambda/{name}:*"}
@@ -236,7 +238,8 @@ def main():
     env = {"DB_CLUSTER_ARN": CLUSTER_ARN, "DB_SECRET_ARN": PORTAL_SECRET_ARN, "DB_NAME": "trialtalk",
            "STAFF_POOL_ID": pool_id, "PARTICIPANT_POOL_ID": "",
            "SCHEDULE_GROUP": GROUP, "REMINDER_FUNCTION_ARN": fn_arn("tt-reminder"),
-           "SCHEDULER_ROLE_ARN": sched_role_arn, "APPROVED_TEMPLATES": APPROVED_TEMPLATES, "LEGACY_TABLE": ""}
+           "SCHEDULER_ROLE_ARN": sched_role_arn, "APPROVED_TEMPLATES": APPROVED_TEMPLATES, "LEGACY_TABLE": "",
+           **TELEMETRY_ENV}
     ensure_function(lam, logs, "tt-staff-api", staff_role, "staff_api.handler.handler", 29, env, code)
 
     print("http api")

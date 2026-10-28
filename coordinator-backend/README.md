@@ -213,6 +213,8 @@ python coordinator-backend/infra/staff_token.py --email you@example.org   # sign
 python coordinator-backend/infra/portal_ui.py --email you@example.org     # staff page on the real API: http://127.0.0.1:8788/staff
 ```
 
+The zip (all of `lambdas/` except `migrate/`) also bundles the pinned OpenTelemetry SDK from [`../infra-requirements-otel.txt`](../infra-requirements-otel.txt), and `tt-staff-api` is deployed with `TELEMETRY_DB_SINK=1`, so the trace and metric endpoints read real spans in AWS. The OTel wheels are pure Python, so the build host's architecture does not matter. `tests/test_deploy_zip.py` checks the packaging without AWS.
+
 The reminder Lambda is `tt-reminder` (`triggers/lambdas/reminder`); `lambdas/reminder` here is not deployed. `lambdas/migrate` is not deployed either: the database is built from [`../db`](../db). The CDK app that used to live in `infra/` was removed (it is in git history); it created a second, unused stack set.
 
 ### Console steps (the plan leaves these to the console)
