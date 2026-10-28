@@ -26,7 +26,8 @@ TOKEN_DAYS = 14
 REQUEST_BUCKET_S = 900     # 15 minutes
 LATENCY_BUCKET_S = 3600    # 1 hour
 CURRENT_S = 24 * 3600      # drift: current = last 24 h ...
-BASELINE_S = 8 * 24 * 3600  # ... baseline = 24 h to 8 d ago
+BASELINE_DAYS = 7           # ... baseline = mean of the 7 one-day windows between 24 h and 8 d ago
+BASELINE_S = (BASELINE_DAYS + 1) * 24 * 3600
 TRACE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 TRACE_STATUS = ("all", "errors")
 # Agent session ids name their participant: the router's "trialtalk-wa-<pid>-<local day>", right-padded with "0" to
@@ -81,13 +82,14 @@ def pid_from_session(session_id) -> str | None:
 
 
 def drift_metrics(current: dict, baseline: dict) -> list[dict]:
-    """The six drift cards. change_pct is None when either side is missing or the baseline is zero."""
+    """The six drift cards. change_pct is None when either side is missing or the baseline is zero. The baseline is
+    the rolling 7-day average of daily values (see _baseline_metrics)."""
     out = []
     for key, label, bad in DRIFT_METRICS:
         cur, base = _num(current.get(key)), _num(baseline.get(key))
         change = round((cur - base) / base * 100, 1) if cur is not None and base else None
         out.append({"key": key, "label": label, "current": cur, "baseline": base, "change_pct": change,
-                    "bad_direction": bad})
+                    "bad_direction": bad, "baseline_kind": "rolling_7d_avg"})
     return out
 
 
@@ -206,28 +208,65 @@ def _token_series(t: db.Tx, now: int) -> list[dict]:
     return out
 
 
+_WINDOW_KEYS = [k for k, _, _ in DRIFT_METRICS]
+
+
+def _agent_stats(row) -> dict:
+    """The three span-derived drift measures from one aggregate row. Rates are None when there were no agent traces."""
+    traces = int(row["traces"])
+    return {"agent_p95_ms": _r1(row["p95"]),
+            "kb_search_rate": round(int(row["kb"]) / traces, 4) if traces else None,
+            "escalation_rate": round(int(row["esc"]) / traces, 4) if traces else None}
+
+
+def _reply_stats(row) -> dict:
+    return {"tokens_in_per_reply": _r1(row["tin"]), "tokens_out_per_reply": _r1(row["tout"]),
+            "reply_length_chars": _r1(row["chars"])}
+
+
+_AGENT_AGG = ("count(DISTINCT trace_id) AS traces, count(DISTINCT trace_id) FILTER (WHERE kb) AS kb, "
+              "count(DISTINCT trace_id) FILTER (WHERE esc) AS esc, "
+              "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95")
+_REPLY_AGG = "avg(input_tokens) AS tin, avg(output_tokens) AS tout, avg(length(body_text)) AS chars"
+
+
+def _agent_cte(day_expr: str) -> str:
+    return ("WITH a AS (SELECT trace_id, duration_ms, " + day_expr + " AS d, "
+            "  EXISTS (SELECT 1 FROM trial.telemetry_spans x WHERE x.trace_id = s.trace_id "
+            "          AND x.name = 'tool.search_trial_docs') AS kb, "
+            "  EXISTS (SELECT 1 FROM trial.telemetry_spans x WHERE x.trace_id = s.trace_id "
+            "          AND x.name = 'tool.escalate_to_coordinator') AS esc "
+            "  FROM trial.telemetry_spans s WHERE s.name = 'agent.invoke' "
+            "  AND s.start_ts >= to_timestamp(:lo::bigint) AND s.start_ts < to_timestamp(:hi::bigint)) ")
+
+
 def _window_metrics(t: db.Tx, lo: int, hi: int) -> dict:
     """The six drift measures over spans/communications in [lo, hi). A rate is None when there were no agent traces."""
-    agent = t.one(
-        "WITH a AS (SELECT trace_id, duration_ms, "
-        "  EXISTS (SELECT 1 FROM trial.telemetry_spans x WHERE x.trace_id = s.trace_id "
-        "          AND x.name = 'tool.search_trial_docs') AS kb, "
-        "  EXISTS (SELECT 1 FROM trial.telemetry_spans x WHERE x.trace_id = s.trace_id "
-        "          AND x.name = 'tool.escalate_to_coordinator') AS esc "
-        "  FROM trial.telemetry_spans s WHERE s.name = 'agent.invoke' "
-        "  AND s.start_ts >= to_timestamp(:lo::bigint) AND s.start_ts < to_timestamp(:hi::bigint)) "
-        "SELECT count(DISTINCT trace_id) AS traces, count(DISTINCT trace_id) FILTER (WHERE kb) AS kb, "
-        "  count(DISTINCT trace_id) FILTER (WHERE esc) AS esc, "
-        "  percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95 FROM a", lo=lo, hi=hi)
+    agent = t.one(_agent_cte("0") + "SELECT " + _AGENT_AGG + " FROM a", lo=lo, hi=hi)
     replies = t.one(
-        "SELECT avg(input_tokens) AS tin, avg(output_tokens) AS tout, avg(length(body_text)) AS chars "
-        "FROM trial.communications WHERE input_tokens IS NOT NULL "
+        "SELECT " + _REPLY_AGG + " FROM trial.communications WHERE input_tokens IS NOT NULL "
         "AND created_at >= to_timestamp(:lo::bigint) AND created_at < to_timestamp(:hi::bigint)", lo=lo, hi=hi)
-    traces = int(agent["traces"])
-    return {"tokens_in_per_reply": _r1(replies["tin"]), "tokens_out_per_reply": _r1(replies["tout"]),
-            "agent_p95_ms": _r1(agent["p95"]), "reply_length_chars": _r1(replies["chars"]),
-            "kb_search_rate": round(int(agent["kb"]) / traces, 4) if traces else None,
-            "escalation_rate": round(int(agent["esc"]) / traces, 4) if traces else None}
+    return {**_reply_stats(replies), **_agent_stats(agent)}
+
+
+def _baseline_metrics(t: db.Tx, now: int) -> dict:
+    """Rolling 7-day baseline: the six measures for each of the 7 one-day windows [now-8d, now-24h), computed in one
+    grouped pass per source, then averaged per metric over the days that have a value (None when none do).
+    Rates average the daily rates; they are not pooled."""
+    lo, hi = now - BASELINE_S, now - CURRENT_S
+    day = f"floor((extract(epoch FROM {{col}}) - :lo::bigint) / {CURRENT_S})::int"
+    agent_rows = t.query(_agent_cte(day.format(col="s.start_ts")) + "SELECT d, " + _AGENT_AGG + " FROM a GROUP BY d",
+                         lo=lo, hi=hi)
+    reply_rows = t.query(
+        "SELECT " + day.format(col="created_at") + " AS d, " + _REPLY_AGG + " FROM trial.communications "
+        "WHERE input_tokens IS NOT NULL AND created_at >= to_timestamp(:lo::bigint) "
+        "AND created_at < to_timestamp(:hi::bigint) GROUP BY 1", lo=lo, hi=hi)
+    daily = [_agent_stats(r) for r in agent_rows] + [_reply_stats(r) for r in reply_rows]
+    out = {}
+    for key in _WINDOW_KEYS:
+        vals = [d[key] for d in daily if d.get(key) is not None]
+        out[key] = round(sum(vals) / len(vals), 4) if vals else None
+    return out
 
 
 def _config_changes(t: db.Tx, since: int) -> list[dict]:
@@ -256,7 +295,7 @@ def observability(event, staff: Staff):
         series = {"requests": _request_series(t, since, now), "tokens": _token_series(t, now),
                   "latency": _latency_series(t, since, now)}
         drift = {"metrics": drift_metrics(_window_metrics(t, now - CURRENT_S, now + 1),
-                                          _window_metrics(t, now - BASELINE_S, now - CURRENT_S)),
+                                          _baseline_metrics(t, now)),
                  "config_changes": _config_changes(t, now - TOKEN_DAYS * 86400)}
     return 200, {"summary": summary, "series": series, "drift": drift}
 

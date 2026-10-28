@@ -31,7 +31,8 @@ def test_drift_change_pct_and_zero_baseline():
     assert metrics["agent_p95_ms"]["change_pct"] is None            # current missing
     assert metrics["reply_length_chars"] == {                        # absent from both dicts
         "key": "reply_length_chars", "label": metrics["reply_length_chars"]["label"], "current": None,
-        "baseline": None, "change_pct": None, "bad_direction": "none"}
+        "baseline": None, "change_pct": None, "bad_direction": "none", "baseline_kind": "rolling_7d_avg"}
+    assert all(m["baseline_kind"] == "rolling_7d_avg" for m in metrics.values())
     down = obs.drift_metrics({"kb_search_rate": 0.2}, {"kb_search_rate": 0.4})
     assert [m["change_pct"] for m in down if m["key"] == "kb_search_rate"] == [-50.0]
 
@@ -169,6 +170,59 @@ def test_drift_baseline_window(call_staff, spans):
     assert m["agent_p95_ms"]["change_pct"] == -50.0
     assert m["kb_search_rate"]["current"] == 0.0 and m["kb_search_rate"]["baseline"] == 1.0
     assert m["kb_search_rate"]["change_pct"] == -100.0
+
+
+def _comm_at(admin, pid, ago_min, tin, tout, text):
+    admin.execute("INSERT INTO trial.communications (participant_id, channel, direction, msg_type, body_text, "
+                  "model_id, input_tokens, output_tokens, created_at) VALUES (%s, 'whatsapp', 'outbound', 'text', %s, "
+                  "'model-a', %s, %s, now() - make_interval(mins => %s))", (pid, text, tin, tout, ago_min))
+
+
+def test_drift_baseline_is_mean_of_daily_values_not_pooled(call_staff, spans):
+    day = 24 * 60
+    # day -2 (ago 2d12h): 1 trace, KB search, 400 ms.  day -4: 4 traces, 1 KB search, 200 ms each.
+    # Rolling mean of daily KB rates = (1.0 + 0.25) / 2 = 0.625; the pooled rate would be 2 / 5 = 0.4.
+    _span(spans, "d2-a", "1" * 32, None, "agent.invoke", 2 * day + 12 * 60, 400.0)
+    _span(spans, "d2-t", "1" * 32, "d2-a", "tool.search_trial_docs", 2 * day + 12 * 60, 10.0)
+    for i in range(4):
+        tr = f"{i + 2}" * 32
+        _span(spans, f"d4-a{i}", tr, None, "agent.invoke", 4 * day + 12 * 60 + i, 200.0)
+        if i == 0:
+            _span(spans, f"d4-t{i}", tr, f"d4-a{i}", "tool.search_trial_docs", 4 * day + 12 * 60, 10.0)
+    _span(spans, "c-agent", "f" * 32, None, "agent.invoke", 5, 200.0)
+    status, body = call_staff("POST", "/staff/participants", {
+        "full_name": "Maria Lopez", "phone_e164": "+17325550142", "study_id": "KOA-301", "site_id": "RIVERSIDE"})
+    assert status == 201, body
+    pid = body["participant"]["participant_id"]
+    # day -2: one reply of 1000 in tokens / 10 chars.  day -4: three replies of 100 in tokens / 20 chars.
+    # Mean of daily averages = 550; the pooled average would be 325.
+    _comm_at(spans, pid, 2 * day + 12 * 60, 1000, 100, "x" * 10)
+    for i in range(3):
+        _comm_at(spans, pid, 4 * day + 12 * 60 + i, 100, 50, "y" * 20)
+    status, body = call_staff("GET", "/staff/observability")
+    assert status == 200, body
+    m = {x["key"]: x for x in body["drift"]["metrics"]}
+    assert all(x["baseline_kind"] == "rolling_7d_avg" for x in m.values())
+    assert m["kb_search_rate"]["baseline"] == pytest.approx(0.625)
+    assert m["kb_search_rate"]["change_pct"] == -100.0 and m["kb_search_rate"]["current"] == 0.0
+    assert m["agent_p95_ms"]["baseline"] == pytest.approx(300.0) and m["agent_p95_ms"]["current"] == 200.0
+    assert m["tokens_in_per_reply"]["baseline"] == pytest.approx(550.0)
+    assert m["tokens_out_per_reply"]["baseline"] == pytest.approx(75.0)      # (100 + 50) / 2, pooled would be 72.5
+    assert m["reply_length_chars"]["baseline"] == pytest.approx(15.0)        # (10 + 20) / 2, pooled would be 17.5
+    assert m["escalation_rate"]["baseline"] == 0.0 and m["escalation_rate"]["change_pct"] is None
+    # the current window is unaffected by the prior days
+    assert m["tokens_in_per_reply"]["current"] is None and m["escalation_rate"]["current"] == 0.0
+
+
+def test_drift_baseline_ignores_days_outside_the_week_and_empty_days(call_staff, spans):
+    day = 24 * 60
+    _span(spans, "old", "a" * 32, None, "agent.invoke", 9 * day, 999.0)        # older than 8 d: not in the baseline
+    _span(spans, "edge", "b" * 32, None, "agent.invoke", 7 * day + 12 * 60, 100.0)   # oldest baseline day
+    status, body = call_staff("GET", "/staff/observability")
+    m = {x["key"]: x for x in body["drift"]["metrics"]}
+    assert m["agent_p95_ms"]["baseline"] == 100.0
+    assert m["tokens_in_per_reply"]["baseline"] is None and m["tokens_in_per_reply"]["change_pct"] is None
+    assert m["tokens_in_per_reply"]["baseline_kind"] == "rolling_7d_avg"
 
 
 def test_traces_list_and_waterfall_roundtrip(call_staff, spans):
