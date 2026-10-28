@@ -80,6 +80,7 @@ GRANT UPDATE (press_count, last_pressed_at, message) ON trial.emergency_alerts T
 -- messaging_role: the router raises an alert on emergency keywords in WhatsApp. It looks for the participant's
 -- open alert (SELECT), folds a repeat into it (UPDATE press_count, last_pressed_at, message) or inserts a new one.
 GRANT SELECT ON trial.emergency_alerts TO messaging_role;
+REVOKE INSERT ON trial.emergency_alerts FROM messaging_role;   -- drop any table-level INSERT from earlier manual grants
 GRANT INSERT (participant_id, severity, source, message, keywords) ON trial.emergency_alerts TO messaging_role;
 GRANT UPDATE (press_count, last_pressed_at, message) ON trial.emergency_alerts TO messaging_role;
 

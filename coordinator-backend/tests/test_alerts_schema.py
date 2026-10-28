@@ -123,4 +123,11 @@ def test_06_is_idempotent_and_policies_stay_split(pg, admin):
     pols = admin.execute("SELECT policyname, cmd FROM pg_policies WHERE tablename = 'emergency_alerts' "
                          "AND 'messaging_role' = ANY (roles) ORDER BY cmd").fetchall()
     assert pols == [("messaging_insert", "INSERT"), ("messaging_select", "SELECT"), ("messaging_update", "UPDATE")]
+    # table-level INSERT (e.g. from an earlier manual grant) is narrowed to the columns the router needs
+    admin.execute("GRANT INSERT ON trial.emergency_alerts TO messaging_role")
+    run_sql_file(admin, DB_SQL / "06_alerts_web.sql")
+    assert admin.execute("SELECT has_column_privilege('messaging_role', 'trial.emergency_alerts', 'status', 'INSERT')"
+                         ).fetchone()[0] is False
+    assert admin.execute("SELECT has_column_privilege('messaging_role', 'trial.emergency_alerts', 'message', 'INSERT')"
+                         ).fetchone()[0] is True
     assert admin.execute("SELECT count(*) FROM pg_indexes WHERE tablename = 'emergency_alerts'").fetchone()[0] == 3
