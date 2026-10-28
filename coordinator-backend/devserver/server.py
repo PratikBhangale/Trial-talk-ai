@@ -516,6 +516,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._dev_locked(path, body)
 
     def _dev_locked(self, path: str, body: bytes | None):
+        if path == "/dev/demo" and self.command == "GET":   # the default login the page fills in; never in the shipped JS
+            return self._send(200, {"login": "+15550100100", "password": DEV_PASSWORD})
         if path == "/dev/identities" and self.command == "GET":
             return self._send(200, identities())
         if path == "/dev/sign-in" and self.command == "POST":
