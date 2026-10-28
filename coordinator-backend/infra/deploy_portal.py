@@ -42,6 +42,18 @@ TAGS = {"project": "trialtalk"}
 # write (they keep TELEMETRY_DB_SINK=1). Explicitly "0": with DB_CLUSTER_ARN + DB_SECRET_ARN set, the sink is on
 # unless told otherwise. The staff API never calls persist_spans, the other thing this flag turns off.
 STAFF_TELEMETRY_ENV = {"TELEMETRY_DB_SINK": "0"}
+# POST /staff/ask (staff_api/ask.py) calls Bedrock Converse with this model: the same global Sonnet inference profile
+# as the participant agent (agent/trial_agent/root_agent.yaml).
+ASK_MODEL_ID = "global.anthropic.claude-sonnet-4-6"
+# The staff role's Bedrock grant for /staff/ask, worded like the "Claude" statement in
+# agent/trial_agent/runtime-policy.json but for any model: Converse needs bedrock:InvokeModel on the inference profile
+# and on the foundation models a global profile routes to, in any region. Only the read-only tool loop uses it. What
+# the model can see is limited by the database (RLS by site, read-only transactions), not by this grant.
+ASK_BEDROCK_STATEMENT = {
+    "Sid": "AskTheClinic", "Effect": "Allow", "Action": ["bedrock:InvokeModel"],
+    "Resource": [f"arn:aws:bedrock:{ARN}:inference-profile/*",
+                 "arn:aws:bedrock:*::foundation-model/*",
+                 "arn:aws:bedrock:::foundation-model/*"]}
 
 
 def staff_env(pool_id: str, sched_role_arn: str) -> dict:
@@ -50,7 +62,7 @@ def staff_env(pool_id: str, sched_role_arn: str) -> dict:
             "STAFF_POOL_ID": pool_id, "PARTICIPANT_POOL_ID": "",
             "SCHEDULE_GROUP": GROUP, "REMINDER_FUNCTION_ARN": fn_arn("tt-reminder"),
             "SCHEDULER_ROLE_ARN": sched_role_arn, "APPROVED_TEMPLATES": APPROVED_TEMPLATES, "LEGACY_TABLE": "",
-            **STAFF_TELEMETRY_ENV}
+            "ASK_MODEL_ID": ASK_MODEL_ID, **STAFF_TELEMETRY_ENV}
 
 
 def build_zip(out_dir, deps_dir=None):
@@ -247,6 +259,8 @@ def main():
             "cognito-idp:AdminUserGlobalSignOut", "cognito-idp:AdminResetUserPassword",
             "cognito-idp:AdminListGroupsForUser", "cognito-idp:AdminAddUserToGroup",
             "cognito-idp:AdminRemoveUserFromGroup"]},
+        # /staff/ask: Bedrock Converse for the read-only "Ask the clinic" tool loop
+        ASK_BEDROCK_STATEMENT,
     ]}
     staff_role, _ = ensure_role(iam, "tt-staff-api-lambda", "lambda.amazonaws.com", policy)
     ensure_function(lam, logs, "tt-staff-api", staff_role, "staff_api.handler.handler", 29,
