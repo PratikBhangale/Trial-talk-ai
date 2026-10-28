@@ -8,7 +8,6 @@ import json
 import os
 import re
 import time
-from contextlib import contextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -180,7 +179,7 @@ def ask_agent(p, text):
     local_day = datetime.now(ZoneInfo(p["timezone"])).strftime("%Y-%m-%d")
     session = f"trialtalk-wa-{p['participant_id']}-{local_day}".ljust(33, "0")   # API needs 33+ chars
     start = time.time()
-    with _span("agent.call", "CLIENT") as span:
+    with telemetry.span("agent.call", kind="CLIENT") as span:
         payload = {"participant_id": p["participant_id"], "text": text}
         tp = telemetry.traceparent()   # the agent's spans join this trace, under agent.call
         if tp:
@@ -226,29 +225,12 @@ def persist_agent_traces():
         telemetry.persist_spans(trace["spans"], service="trial-agent", trace_id=trace["trace_id"])
 
 
-@contextmanager
-def _span(name, kind, traceparent=None, **attrs):
-    """telemetry.span() with an OTel span kind, continuing `traceparent` (W3C) when it is valid. telemetry.span()
-    takes neither, and that module is kept byte-identical with coordinator-backend's copy."""
-    attrs = {k: v for k, v in attrs.items() if v is not None}
-    tracer = telemetry._state.get("tracer") if telemetry.init() else None
-    if tracer is None:
-        with telemetry.span(name, **attrs) as s:   # no-op without the SDK
-            yield s
-        return
-    from opentelemetry.trace import SpanKind
-    with tracer.start_as_current_span(name, context=telemetry.context_from(traceparent), kind=SpanKind[kind],
-                                      attributes=attrs or None, record_exception=True,
-                                      set_status_on_exception=True) as s:
-        yield s
-
-
 def handler(event, context):
     try:
         for record in event["Records"]:
             m = json.loads(record["body"])
-            with _span("whatsapp.route", "CONSUMER", m.get("traceparent"),
-                       **{"trialtalk.msg_type": m.get("type")}):
+            with telemetry.span("whatsapp.route", kind="CONSUMER", context_carrier=m.get("traceparent"),
+                                **{"trialtalk.msg_type": m.get("type")}):
                 pid = m.get("participant_id")
                 if not pid:
                     reply(m, None, "en", t("en", "unknown"))

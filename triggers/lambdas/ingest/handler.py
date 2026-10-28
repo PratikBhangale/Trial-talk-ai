@@ -9,7 +9,6 @@ The topic is a standard SNS topic, which can't feed a FIFO queue directly; this 
 """
 import json
 import os
-from contextlib import contextmanager
 
 import boto3
 
@@ -42,7 +41,7 @@ def handle_status(s, aws_id):
 
 
 def handle_message(m):
-    with _span("whatsapp.ingest", "CONSUMER") as span:
+    with telemetry.span("whatsapp.ingest", kind="CONSUMER") as span:
         f = message_fields(m)
         span.set_attribute("trialtalk.msg_type", f["type"])
         with Tx() as tx:
@@ -69,21 +68,6 @@ def handle_message(m):
             sqs.send_message(QueueUrl=QUEUE_URL, MessageGroupId=f["phone"], MessageDeduplicationId=f["wamid"],
                              MessageBody=json.dumps(body))
         print(f"logged {f['type']} {row['comm_id']} for {pid or 'unknown sender'}, forwarded={FORWARD}")
-
-
-@contextmanager
-def _span(name, kind, **attrs):
-    """telemetry.span() with an OTel span kind (telemetry.span() takes none, and that module is kept
-    byte-identical with coordinator-backend's copy)."""
-    tracer = telemetry._state.get("tracer") if telemetry.init() else None
-    if tracer is None:
-        with telemetry.span(name, **attrs) as s:   # no-op without the SDK
-            yield s
-        return
-    from opentelemetry.trace import SpanKind
-    with tracer.start_as_current_span(name, kind=SpanKind[kind], attributes=attrs or None,
-                                      record_exception=True, set_status_on_exception=True) as s:
-        yield s
 
 
 def handler(event, context):

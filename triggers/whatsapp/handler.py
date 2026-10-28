@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 import time
-from contextlib import contextmanager
+from contextlib import nullcontext
 from datetime import datetime, timezone
 
 import boto3
@@ -153,7 +153,7 @@ def ask_agent(pid: str, text: str, conversation_key: str | None = None) -> str:
     payload = {"participant_id": pid, "text": text}
     if conversation_key:
         payload["conversation_key"] = conversation_key
-    with _span("agent.call", "CLIENT") as span:
+    with _span("agent.call", kind="CLIENT") as span:
         tp = telemetry.traceparent() if telemetry else None   # the agent's spans join this trace
         if tp:
             payload["traceparent"] = tp
@@ -202,19 +202,9 @@ class _NoSpan:
         pass
 
 
-@contextmanager
-def _span(name, kind, **attrs):
-    """A telemetry span with an OTel span kind (telemetry.span() takes none, and that module is kept
-    byte-identical with coordinator-backend's copy). A no-op when telemetry or its SDK is missing."""
-    attrs = {k: v for k, v in attrs.items() if v is not None}
-    tracer = telemetry._state.get("tracer") if telemetry and telemetry.init() else None
-    if tracer is None:
-        yield _NoSpan()
-        return
-    from opentelemetry.trace import SpanKind
-    with tracer.start_as_current_span(name, kind=SpanKind[kind], attributes=attrs or None,
-                                      record_exception=True, set_status_on_exception=True) as s:
-        yield s
+def _span(name, **kw):
+    """telemetry.span(), or a no-op when telemetry.py isn't bundled with this Lambda."""
+    return telemetry.span(name, **kw) if telemetry else nullcontext(_NoSpan())
 
 
 # ---------- 5. reply on WhatsApp ----------
@@ -238,7 +228,7 @@ def send_whatsapp(origination_id: str, to: str, text: str) -> None:
 def handler(event, context):
     try:
         for origination_id, sender, message in incoming_messages(event):
-            with _span("whatsapp.legacy", "CONSUMER", **{"trialtalk.msg_type": message.get("type")}):
+            with _span("whatsapp.legacy", kind="CONSUMER", **{"trialtalk.msg_type": message.get("type")}):
                 pid = find_participant(sender)
                 conversation_key = None
 
