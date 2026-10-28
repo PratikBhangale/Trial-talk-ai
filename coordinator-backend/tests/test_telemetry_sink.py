@@ -306,7 +306,8 @@ def test_emergency_status_poll_is_untraced():
 
     @r.route("GET", "/me/emergency")
     def poll(event, claims):
-        return 200, {"alerts": []}
+        with telemetry.span("db SELECT"):   # the handler's own spans must not become orphan roots
+            return 200, {"alerts": []}
 
     @r.route("POST", "/me/emergency")
     def press(event, claims):

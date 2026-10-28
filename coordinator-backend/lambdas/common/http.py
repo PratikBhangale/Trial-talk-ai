@@ -72,7 +72,8 @@ class Router:
         template = next((tpl for m, pattern, _, tpl in self.routes if m == method and pattern.match(path)),
                         "unmatched")  # the route template, never the URL: ids stay out of telemetry
         if (method, template) in self.UNTRACED:
-            return self._dispatch(event, claims_fn, method, path)
+            with telemetry.suppressed():   # no spans at all: a poll's db spans must not become orphan roots
+                return self._dispatch(event, claims_fn, method, path)
         try:
             with telemetry.request_span(method, template, event.get("headers")) as span:
                 resp = self._dispatch(event, claims_fn, method, path)

@@ -335,6 +335,21 @@ def _span_kind(kind):
         return trace.SpanKind.INTERNAL
 
 
+_suppressed = False   # inside suppressed(): no spans at all, so a poll's db spans cannot become orphan roots
+
+
+@contextmanager
+def suppressed():
+    """No span of any kind while active (request, db, client): the whole request stays out of telemetry.
+    For routes that are polls, not business traffic. Single-threaded per Lambda invocation, so a flag is enough."""
+    global _suppressed
+    prev, _suppressed = _suppressed, True
+    try:
+        yield
+    finally:
+        _suppressed = prev
+
+
 @contextmanager
 def span(name: str, kind="INTERNAL", context_carrier: str | None = None, **attributes):
     """Child span (or a root one outside a request). Exceptions are recorded and re-raised.
@@ -342,7 +357,7 @@ def span(name: str, kind="INTERNAL", context_carrier: str | None = None, **attri
     kind: a SpanKind or its name ("SERVER", "CLIENT", "CONSUMER", ...). context_carrier: a W3C traceparent string;
     when valid the span continues that remote trace, otherwise it starts from the current context.
     """
-    if not init():
+    if _suppressed or not init():
         yield _NullSpan()
         return
     with _state["tracer"].start_as_current_span(
@@ -354,7 +369,7 @@ def span(name: str, kind="INTERNAL", context_carrier: str | None = None, **attri
 @contextmanager
 def request_span(method: str, route: str, headers: dict | None = None):
     """Server span for one API call. Continues the caller's trace if a W3C traceparent header came in."""
-    if not init():
+    if _suppressed or not init():
         yield _NullSpan()
         return
     ctx = TraceContextTextMapPropagator().extract(carrier={k.lower(): v for k, v in (headers or {}).items()})
