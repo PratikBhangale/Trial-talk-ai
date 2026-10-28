@@ -211,14 +211,20 @@ def traces(event, staff: Staff):
             "  CASE WHEN agg.has_error THEN 'ERROR' ELSE r.status END AS status "
             "FROM (SELECT * FROM trial.telemetry_spans WHERE parent_id IS NULL "
             "      ORDER BY start_ts DESC, span_id LIMIT :limit::int) r "
-            "JOIN LATERAL (SELECT count(*) AS span_count, bool_or(s.status = 'ERROR') AS has_error, "
-            "  CASE WHEN count(*) FILTER (WHERE s.attrs->>'gen_ai.usage.input_tokens' ~ '^[0-9]+$' "
-            "         OR s.attrs->>'gen_ai.usage.output_tokens' ~ '^[0-9]+$') = 0 THEN NULL "
-            "  ELSE sum(CASE WHEN s.attrs->>'gen_ai.usage.input_tokens' ~ '^[0-9]+$' "
-            "         THEN (s.attrs->>'gen_ai.usage.input_tokens')::bigint ELSE 0 END "
-            "       + CASE WHEN s.attrs->>'gen_ai.usage.output_tokens' ~ '^[0-9]+$' "
-            "         THEN (s.attrs->>'gen_ai.usage.output_tokens')::bigint ELSE 0 END) END AS tokens "
-            "  FROM trial.telemetry_spans s WHERE s.trace_id = r.trace_id) agg ON true "
+            "JOIN LATERAL (SELECT count(*) AS span_count, bool_or(w.status = 'ERROR') AS has_error, "
+            # Tokens: agent.invoke spans only (the router's agent.call span repeats the same numbers); a trace with
+            # no token-bearing agent.invoke falls back to its agent.call spans.
+            "  CASE WHEN count(w.tok) FILTER (WHERE w.name = 'agent.invoke') > 0 "
+            "       THEN sum(w.tok) FILTER (WHERE w.name = 'agent.invoke') "
+            "       ELSE sum(w.tok) FILTER (WHERE w.name = 'agent.call') END AS tokens "
+            "  FROM (SELECT s.name, s.status, "
+            "    CASE WHEN s.attrs->>'gen_ai.usage.input_tokens' ~ '^[0-9]+$' "
+            "           OR s.attrs->>'gen_ai.usage.output_tokens' ~ '^[0-9]+$' "
+            "    THEN (CASE WHEN s.attrs->>'gen_ai.usage.input_tokens' ~ '^[0-9]+$' "
+            "          THEN (s.attrs->>'gen_ai.usage.input_tokens')::bigint ELSE 0 END "
+            "        + CASE WHEN s.attrs->>'gen_ai.usage.output_tokens' ~ '^[0-9]+$' "
+            "          THEN (s.attrs->>'gen_ai.usage.output_tokens')::bigint ELSE 0 END) END AS tok "
+            "    FROM trial.telemetry_spans s WHERE s.trace_id = r.trace_id) w) agg ON true "
             "ORDER BY r.start_ts DESC, r.span_id", limit=limit)
     for r in rows:
         r["duration_ms"] = _num(r["duration_ms"])

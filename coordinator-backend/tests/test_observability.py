@@ -178,6 +178,19 @@ def test_traces_list_and_waterfall_roundtrip(call_staff, spans):
     assert call_staff("GET", "/staff/observability", query={"hours": "x"})[0] == 400
 
 
+def test_trace_tokens_not_double_counted(call_staff, spans):
+    both, only_call = "e" * 32, "f" * 32
+    usage = {"gen_ai.usage.input_tokens": 120, "gen_ai.usage.output_tokens": 45}
+    _span(spans, "w-root", both, None, "whatsapp.route", 10, 500.0, service="router")
+    _span(spans, "w-call", both, "w-root", "agent.call", 10, 400.0, attrs=usage, service="router")
+    _span(spans, "w-invoke", both, "w-call", "agent.invoke", 10, 380.0, attrs=usage, service="agent")
+    _span(spans, "o-root", only_call, None, "whatsapp.route", 5, 500.0, service="router")
+    _span(spans, "o-call", only_call, "o-root", "agent.call", 5, 400.0, attrs=usage, service="router")
+    traces = {t["trace_id"]: t for t in call_staff("GET", "/staff/observability/traces")[1]["traces"]}
+    assert traces[both]["tokens"] == 165 and traces[both]["span_count"] == 3
+    assert traces[only_call]["tokens"] == 165
+
+
 def test_empty_db_returns_zeros_not_500(call_staff, spans):
     status, body = call_staff("GET", "/staff/observability")
     assert status == 200, body
