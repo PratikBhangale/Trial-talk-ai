@@ -25,13 +25,15 @@ TT_PG_BIN=/opt/homebrew/opt/postgresql@16/bin LC_ALL=en_US.UTF-8 \
   .venv/bin/python coordinator-backend/devserver/server.py --seed-telemetry
 ```
 
+On Linux use `LC_ALL=C.UTF-8` instead of `en_US.UTF-8`. The `postgresql@16` path is an example: any modern PostgreSQL `bin` directory works (also verified against 18).
+
 Then open **http://127.0.0.1:8787/staff**:
 
 1. You land on the sign-in page with a demo staff account already filled in (Jamie Fox, a PI at both sites; local password for every account is `TrialTalk-Demo-2026!`). Click **Sign in**.
 2. Click **Observability** in the sidebar: about 7 days of synthetic traces (`whatsapp.ingest` -> `whatsapp.route` -> `agent.call` -> `agent.invoke` -> `tool.*`), request/error/latency charts, token counts, estimated cost, a trace waterfall and a mid-week agent-config change marker. **Token usage** shows token totals.
 3. Also worth a look: **Emergency alerts**, **Participants** (reminders, timeline, communications), **Requests**, **Team**. The participant portal is at http://127.0.0.1:8787/participant (sign in with `+1 732 555 0142`, Maria Lopez, same password); its orange adverse-event button raises an alert that appears on the staff side within a few seconds, and its chat talks to a local echo agent.
 
-Stop with Ctrl+C; the database is deleted. `LC_ALL=en_US.UTF-8` is needed on macOS for the throwaway database. Anything the server would have sent to AWS (WhatsApp messages, SES emails, schedules) is recorded by the fakes and readable at http://127.0.0.1:8787/dev/outbox. Full runbook, including `--real-agent` and the Conda-based setup: [`coordinator-backend/README.md`](coordinator-backend/README.md#testing).
+Stop with Ctrl+C; the database is deleted. `LC_ALL` sets a UTF-8 locale for the throwaway database: `en_US.UTF-8` on macOS; on Linux use `LC_ALL=C.UTF-8` (minimal images and containers often lack `en_US.UTF-8`, and `initdb` fails without it), or drop the variable if your default locale is already UTF-8. Any modern PostgreSQL bin dir works (the docs target 16; this was also run against 18): point `TT_PG_BIN` at yours. Anything the server would have sent to AWS (WhatsApp messages, SES emails, schedules) is recorded by the fakes and readable at http://127.0.0.1:8787/dev/outbox. Full runbook, including `--real-agent` and the Conda-based setup: [`coordinator-backend/README.md`](coordinator-backend/README.md#testing).
 
 ## Where AWS Communication Developer Services are used at runtime
 
@@ -79,8 +81,8 @@ AWS End User Messaging Social --> SNS whatsapp_topic --> tt-ingest Lambda
                                                             v
                          reply --> wa.send_text --> EUM Social --> Participant
 
-Staff / participant browser --> Amplify pages --> Cognito (separate pools) --> API Gateway HTTP API (JWT)
-   --> tt-staff-api / tt-portal-api Lambdas --> Aurora PostgreSQL via RDS Data API (row-level security)
+Staff browser --> Amplify pages --> Cognito staff pool --> API Gateway HTTP API tt-portal-api (JWT)
+   --> tt-staff-api Lambda (staff API; the participant API, participant_api, is not deployed yet) --> Aurora PostgreSQL via RDS Data API (row-level security)
 EventBridge Scheduler (rem-<id>) --> tt-reminder Lambda --> WhatsApp template (+ SES follow-up)
 
 OpenTelemetry: ingest / router / reminder / agent spans (one trace per message, W3C traceparent propagated)
@@ -96,7 +98,7 @@ Deploy is script-driven with an AWS profile; nothing here is needed for the loca
 - Database (Aurora Serverless v2 via Data API): [`db/README.md`](db/README.md)
 - Agent (AgentCore Runtime via the AgentCore CLI): [`agent/README.md`](agent/README.md)
 - Trigger Lambdas, SNS/SQS wiring, schedules, cutover: [`triggers/README.md`](triggers/README.md) (`python triggers/infra/deploy.py --profile <profile>`)
-- Staff/participant API, Cognito, portal pages: [`coordinator-backend/README.md`](coordinator-backend/README.md#deploy) and [`coordinator-frontend/README.md`](coordinator-frontend/README.md) (`python coordinator-backend/infra/deploy_portal.py --profile <profile>`)
+- Staff API (HTTP API `tt-portal-api`, Lambda `tt-staff-api`), Cognito staff pool, portal pages (the participant API is not deployed yet): [`coordinator-backend/README.md`](coordinator-backend/README.md#deploy) and [`coordinator-frontend/README.md`](coordinator-frontend/README.md) (`python coordinator-backend/infra/deploy_portal.py --profile <profile>` deploys the staff API only)
 - WhatsApp templates and the first staff user are console steps, listed in the backend README.
 
 ## Tests
