@@ -641,6 +641,44 @@ button.kpi:focus-visible { outline-offset: -2px; border-radius: 0; }
 .engage-bar { height: 12px; }
 .engage .note { margin-top: 0; }
 
+/* ---------------------------------------------------------------- overview: trial portfolio and operations
+   Six headline tiles and four operations tiles: column counts that divide them exactly (6/3/2 and 4/2), so the
+   band never shows an empty cell. */
+.overview > .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+#ovOpsKpis .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@container main (max-width: 1100px) { .overview > .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container main (max-width: 640px) {
+  .overview > .kpis, #ovOpsKpis .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---------------------------------------------------------------- overview: trial portfolio and operations
+   The portfolio is the clinic's trial cards as dense rows: a row per trial, the same four figures, the whole row a
+   link to the trial. Rows bleed to the panel edges so the hover tint reads as one line, like a table row. */
+.pf-rows { display: grid; margin: -4px calc(-1 * var(--s-panel)) calc(-1 * var(--s-panel)); }
+.pf-row { display: grid; grid-template-columns: minmax(200px, 1fr) auto 20px; gap: 8px 24px; align-items: center;
+  padding: 14px var(--s-panel); border-top: 1px solid var(--border); color: var(--text); text-decoration: none;
+  transition-property: background-color; transition-duration: var(--dur-fast); }
+.pf-row:hover { background: var(--surface-2); color: var(--text); }
+.pf-row:focus-visible { outline-offset: -2px; }
+.pf-row:last-child { border-radius: 0 0 var(--r-lg) var(--r-lg); }
+.pf-name { display: grid; gap: 6px; min-width: 0; }
+.pf-name b { font-size: var(--fs-body); line-height: 1.4; overflow-wrap: anywhere; }
+.pf-cond { font-size: var(--fs-xs); color: var(--text-2); align-self: center; }
+.pf-stats { display: grid; grid-template-columns: repeat(4, minmax(72px, auto)); gap: 24px; margin: 0; }
+.pf-stats div { display: grid; gap: 2px; min-width: 0; text-align: end; }
+.pf-stats dt { font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; }
+.pf-stats dd { margin: 0; font-size: var(--fs-h2); font-weight: var(--fw-strong); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.pf-stats dd.is-bad { color: var(--bad); }
+.pf-row .go-cell { display: inline-flex; width: auto; }
+.pf-rows > .empty { margin: 4px var(--s-panel) var(--s-panel); }
+@container main (max-width: 760px) {
+  .pf-row { grid-template-columns: minmax(0, 1fr) 20px; }
+  .pf-row .go-cell { grid-row: 1; grid-column: 2; }
+  .pf-stats { grid-column: 1 / -1; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .pf-stats div { text-align: start; }
+}
+.ov-ops-chart { margin-top: 20px; }
+
 /* ---------------------------------------------------------------- ask: the participant chat window, for staff questions */
 .ask-window .chat-top .small { flex-shrink: 0; }
 .ask-meta { align-self: flex-start; display: grid; gap: 4px; max-width: min(72%, 600px); margin-top: -4px; padding-inline-start: 4px;

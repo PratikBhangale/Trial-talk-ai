@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<script>try{var t=localStorage.getItem("tt.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;if(localStorage.getItem("tt.nav.collapsed")==="1")document.documentElement.classList.add("nav-collapsed")}catch(e){}</script>
+<script>try{var t=localStorage.getItem("tt.theme");document.documentElement.dataset.theme=t==="light"||t==="dark"?t:matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";if(localStorage.getItem("tt.nav.collapsed")==="1")document.documentElement.classList.add("nav-collapsed")}catch(e){}</script>
 <title>Overview · TrialTalk Staff</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,10 +16,8 @@
 <div class="app">
   <aside class="sidebar">
     <nav class="nav" aria-label="Staff portal">
-      <div class="group" aria-hidden="true">Enterprise</div>
-      <a href="#/clinic" data-route="clinic"><span data-icon="buildings"></span><span class="nl">Clinic</span></a>
-      <div class="group" aria-hidden="true">Today</div>
       <a href="#/overview" data-route="overview"><span data-icon="overview"></span><span class="nl">Overview</span></a>
+      <a href="#/clinic" data-route="clinic"><span data-icon="buildings"></span><span class="nl">Clinical trials</span></a>
       <div class="group" aria-hidden="true">Care</div>
       <a href="#/alerts" data-route="alerts"><span data-icon="alert"></span><span class="nl">Emergency alerts</span><span class="count hidden" id="navAlerts"></span></a>
       <a href="#/participants" data-route="participants"><span data-icon="users"></span><span class="nl">Participants</span><span class="count hidden" id="navParticipants"></span></a>
@@ -50,7 +48,7 @@
         <section data-page="clinic" hidden aria-labelledby="h-clinic">
           <div class="page-head">
             <div>
-              <h1 id="h-clinic" tabindex="-1">Clinic</h1>
+              <h1 id="h-clinic" tabindex="-1">Clinical trials</h1>
               <p>Every trial with patients at your sites: who is talking to the study on WhatsApp, how dosing is going, and which symptoms the agent handled or escalated as urgent.</p>
             </div>
             <div class="actions"><button id="clinicRefresh" type="button"><span data-icon="refresh"></span>Refresh</button></div>
@@ -86,11 +84,17 @@
           </div>
           <div class="kpis">
             <a class="kpi" href="#/alerts" id="kpiAlertsTile"><span>Open emergency alerts</span><b id="kpiAlerts">–</b><small id="kpiAlertsSub">Waiting for a person</small></a>
+            <a class="kpi" href="#/clinic"><span>Active trials</span><b id="kpiTrials">–</b><small>With patients at your sites</small></a>
             <a class="kpi" href="#/participants"><span>Enrolled participants</span><b id="kpiEnrolled">–</b><small id="kpiEnrolledSub">At your sites</small></a>
+            <a class="kpi" href="#/clinic" id="kpiEngagedTile" title="Patients who messaged the study via WhatsApp in the last 14 days"><span>Engaged on WhatsApp (14&nbsp;d)</span><b id="kpiEngaged">–</b><small>Messaged in the last 14 days</small></a>
             <a class="kpi" href="#/requests" id="kpiRequestsTile"><span>Requests waiting</span><b id="kpiRequests">–</b><small>From participants</small></a>
             <a class="kpi" href="#/usage"><span>Agent replies, 30 days</span><b id="kpiTokens">–</b><small id="kpiTokensSub">Sent by the study agent</small></a>
           </div>
-          <div class="cols-2 even">
+          <div class="panel section-gap" id="ovPfPanel" hidden>
+            <div class="panel-head"><h2>Trial portfolio</h2><span class="tag" id="ovPfTag"></span><div class="actions"><a href="#/clinic">All trials</a></div></div>
+            <div class="pf-rows" id="ovPortfolio"></div>
+          </div>
+          <div class="cols-2 even section-gap">
             <div class="panel">
               <div class="panel-head"><h2>Active alerts</h2><div class="actions"><a href="#/alerts">View all alerts</a></div></div>
               <div id="ovAlerts"></div>
@@ -111,6 +115,12 @@
               <p class="panel-note">Signals that someone could drop out. Each one says where it came from; none is a diagnosis.</p>
               <div id="ovRisk"></div>
             </div>
+          </div>
+          <div class="panel section-gap" id="ovOpsPanel" hidden>
+            <div class="panel-head"><h2>Operations</h2><span class="tag">Last 24 h</span><div class="actions"><a href="#/observability">Open observability</a></div></div>
+            <p class="panel-note">How the WhatsApp pipeline and the study agent are running right now. Aggregates and timings only, no message content.</p>
+            <div id="ovOpsKpis"></div>
+            <div id="ovOpsChart" class="ov-ops-chart"></div>
           </div>
         </section>
 
@@ -406,7 +416,7 @@
 const state = { pid: null, tab: 'events', reminders: [], me: null, page: 'overview' };
 
 // ------------------------------------------------------------ pages (hash routes)
-const ROUTES = { clinic: 'Clinic', ask: 'Ask', overview: 'Overview', alerts: 'Emergency alerts', participants: 'Participants', requests: 'Requests',
+const ROUTES = { clinic: 'Clinical trials', ask: 'Ask', overview: 'Overview', alerts: 'Emergency alerts', participants: 'Participants', requests: 'Requests',
   team: 'Team', usage: 'Token usage', observability: 'Observability' };
 
 function route(moveFocus) {
@@ -421,7 +431,7 @@ function route(moveFocus) {
   if (page !== 'observability' && $('#traceSheet').open) $('#traceSheet').close();
   $$('[data-page]').forEach(s => { s.hidden = s.dataset.page !== page; });
   setCrumbs(page === 'participant' ? [['Staff', '#/overview'], ['Participants', '#/participants'], [state.pid === decodeURIComponent(sub) && state.detailName ? state.detailName : decodeURIComponent(sub), '']]
-    : page === 'trial' ? [['Staff', '#/overview'], ['Clinic', '#/clinic'], [trialName(trialId), '']]
+    : page === 'trial' ? [['Staff', '#/overview'], ['Clinical trials', '#/clinic'], [trialName(trialId), '']]
     : [['Staff', '#/overview'], [ROUTES[page], '']]);
   if (page === 'participant' && TT.user) showDetail(decodeURIComponent(sub), 'page');
   $$('.nav a').forEach(a => {
@@ -462,7 +472,9 @@ async function onSignIn(user) {
   const me = state.me, name = TT.identity?.name || TT.user;
   const today = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
   const sites = new Intl.ListFormat(undefined, { type: 'conjunction' }).format(me.site_ids.map(s => humanize(s.toLowerCase())));
-  $('#ovScope').textContent = `${today} · ${sites} · Study ${me.study_ids.join(', ') || 'any'}`;
+  const hour = new Date().getHours(), greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const first = String(name || '').trim().split(/\s+/)[0];
+  $('#ovScope').textContent = `${greet}${first ? `, ${first}` : ''} · ${today} · ${sites} · Study ${me.study_ids.join(', ') || 'any'}`;
   $('#whoami').textContent = `Enroll participants at ${sites}, update their details and set dose and visit reminders.`;
   $('#enrollSite').innerHTML = me.site_ids.map(s => `<option>${esc(s)}</option>`).join('');
   $('#partList').innerHTML = skeleton(4);
@@ -475,11 +487,14 @@ async function onSignIn(user) {
 
 // ------------------------------------------------------------ overview
 async function loadOverview() {
-  const [{ participants }, usage, { requests }] = await Promise.all([
+  loadOvOps();   // fire and forget: the Operations panel fills in when the telemetry summary arrives
+  const [{ participants }, usage, { requests }, clinic] = await Promise.all([
     api('GET', '/staff/participants', undefined, { quiet: true }),
     api('GET', '/staff/usage?days=30', undefined, { quiet: true }),
     api('GET', '/staff/requests', undefined, { quiet: true }),
-  ]).catch(() => [{ participants: [] }, null, { requests: [] }]);
+    api('GET', '/staff/clinic', undefined, { quiet: true }).catch(() => null),
+  ]).catch(() => [{ participants: [] }, null, { requests: [] }, null]);
+  renderPortfolio(clinic);
   renderSites(participants);
   renderRisk(participants, requests);
   const enrolled = participants.filter(p => p.status === 'enrolled').length;
@@ -491,6 +506,71 @@ async function loadOverview() {
     $('#kpiTokens').textContent = nf(t.calls);
     $('#kpiTokensSub').textContent = `${nf(+t.input_tokens + +t.output_tokens)} tokens used`;
   }
+}
+
+// Trial portfolio: one row per trial from GET /staff/clinic, the same numbers as the Clinical trials page.
+// The panel stays hidden when the clinic endpoint is unavailable, so the rest of the overview still works.
+function renderPortfolio(clinic) {
+  const panel = $('#ovPfPanel');
+  if (!clinic) { panel.hidden = true; return; }
+  const s = clinic.summary || {}, trials = clinic.trials || [];
+  trials.forEach(t => { Widgets.trials[t.study_id] = t.name; });
+  $('#kpiTrials').textContent = nf(s.trials ?? trials.length);
+  const engaged = s.patients ? Math.max(0, Math.min(100, 100 - (+s.pct_not_engaging || 0))) : null;
+  $('#kpiEngaged').textContent = engaged === null ? '—' : pctText(engaged);
+  $('#kpiEngagedTile').classList.toggle('tone-warn', engaged !== null && engaged < 75);
+  $('#ovPfTag').textContent = trials.length ? `${plural(trials.length, 'trial')} · ${plural(s.patients || 0, 'patient')}` : '';
+  panel.hidden = false;
+  $('#ovPortfolio').innerHTML = trials.length ? trials.map(pfRow).join('')
+    : emptyState('buildings', 'No trials yet', 'A trial appears here once one of its patients is enrolled at your sites.');
+}
+
+function pfRow(t) {
+  const id = esc(t.study_id);
+  return `<a class="pf-row" href="#/clinic/${esc(encodeURIComponent(t.study_id))}">
+    <div class="pf-name"><b>${esc(t.name)}</b>
+      <span class="tag-list">${t.phase ? `<span class="tag">${esc(t.phase)}</span>` : ''}<span class="tag">${id}</span>${t.condition ? `<span class="pf-cond">${esc(t.condition)}</span>` : ''}</span></div>
+    <dl class="pf-stats">
+      <div><dt>Patients</dt><dd>${nf(t.patients)}</dd></div>
+      <div title="Messaged the study via WhatsApp in the last 14 days"><dt>Engaged</dt><dd>${t.patients ? pctText(t.engaged_pct) : '—'}</dd></div>
+      <div title="${t.adherence_pct === null ? 'No doses due in the last 14 days' : 'Doses taken of doses due, last 14 days'}"><dt>Adherence</dt><dd>${pctText(t.adherence_pct)}</dd></div>
+      <div title="Emergency alerts raised in this trial, all time"><dt>Alerts</dt><dd class="${+t.critical ? 'is-bad' : ''}">${nf(t.critical)}</dd></div>
+    </dl>
+    <span class="go-cell" aria-hidden="true">${icon('chevron', 'sm')}</span>
+  </a>`;
+}
+
+// Operations: the observability summary and request chart, once per minute at most (it is the heaviest query set).
+// Loaded after the page renders and hidden when unavailable: the overview never waits on telemetry.
+async function loadOvOps() {
+  if (!TT.user) return;
+  if (Widgets.ovObs && Date.now() - Widgets.ovObsAt < 60000) return renderOvOps(Widgets.ovObs);
+  let o;
+  try { o = await api('GET', '/staff/observability?hours=24', undefined, { quiet: true }); }
+  catch { $('#ovOpsPanel').hidden = true; return; }
+  Widgets.ovObs = o; Widgets.ovObsAt = Date.now();
+  renderOvOps(o);
+}
+
+function renderOvOps(o) {
+  if (state.page !== 'overview') return;
+  const s = o.summary, rate = (+s.error_rate || 0) * 100;
+  $('#ovOpsPanel').hidden = false;
+  $('#ovOpsKpis').innerHTML = `<div class="kpis obs-trace-kpis">
+    <div class="kpi"><span>Requests</span><b>${nf(s.requests)}</b><small>${nf(s.traces)} traces</small></div>
+    <div class="kpi ${rate >= 5 ? 'tone-bad' : rate >= 1 ? 'tone-warn' : ''}"><span>Error rate</span><b>${s.requests ? rate.toFixed(1) + '%' : '—'}</b><small>${nf(s.errors)} failed</small></div>
+    <div class="kpi"><span>p95 latency</span><b>${esc(dur(s.p95_ms))}</b><small>Median ${esc(dur(s.p50_ms))}</small></div>
+    <div class="kpi"><span>Tokens</span><b>${esc(compactN((+s.tokens_in || 0) + (+s.tokens_out || 0)))}</b><small>Est. ${esc(usd(s.est_cost_usd))}</small></div>
+  </div>`;
+  const rq = o.series.requests, rqX = rq.map(b => Date.parse(b.t));
+  const rqTotal = rq.reduce((n, b) => n + b.count, 0), rqErr = rq.reduce((n, b) => n + b.errors, 0);
+  obsChart($('#ovOpsChart'), 'bars', {
+    x: rqX, step: 900000, stacked: true, integer: true, yLabel: 'Requests per 15 min',
+    label: `Requests per 15 minutes over the last 24 hours: ${rqTotal} requests, ${rqErr} errors.`,
+    series: [{ name: 'Succeeded', color: '--ch-1', values: rq.map(b => b.count - b.errors) },
+      { name: 'Errors', color: '--bad-solid', values: rq.map(b => b.errors) }],
+    xFormat: t => hourFmt.format(t), tipFormat: t => `${stampFmt.format(t)} – ${timeFmt.format(t + 900000)}`,
+  }, rqTotal ? '' : emptyState('activity', 'No requests in the last 24 hours', 'Each WhatsApp message, chat reply and scheduled job shows up here as it is processed.'));
 }
 
 // Enrollment by site: every site the signed-in person covers, including ones with no participants at all.

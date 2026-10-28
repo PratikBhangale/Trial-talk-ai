@@ -108,7 +108,12 @@ const ICON_PATHS = {
 const THEMES = { system: ['monitor', 'System'], light: ['sun', 'Light'], dark: ['moon', 'Dark'] };
 const Theme = {
   get() { const t = store('theme'); return THEMES[t] ? t : 'system'; },
-  apply() { const t = this.get(); if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; },
+  // System pins the OS's current scheme rather than leaving <html> unmarked: with color-scheme "light dark",
+  // Chromium paints light-dark() backgrounds on visited links (every #/ tile and card) as a mix of both sides.
+  apply() {
+    const t = this.get();
+    document.documentElement.dataset.theme = t === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : t;
+  },
   set(t) {
     store('theme', t);
     const swap = () => { this.apply(); renderThemeControls(); };
@@ -116,6 +121,8 @@ const Theme = {
   },
 };
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+Theme.apply();   // pin the resolved scheme at load (the <head> script already pinned an explicit choice)
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (Theme.get() === 'system') Theme.apply(); });
 
 // A card leaving a list: it fades first, then the gap closes, so the cards below slide up instead of jumping.
 // Returns the animation (or null): cancel it after re-rendering, so a card that turns out to still be there reappears.

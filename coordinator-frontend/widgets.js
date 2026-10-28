@@ -489,7 +489,7 @@ async function loadTrial(id) {
   const st = o.study || {}, t = o.summary || {}, eng = o.engagement || { engaged: 0, not_engaging: 0 };
   Widgets.trials[id] = st.name || id;
   $('#h-trial').textContent = trialName(id);
-  setCrumbs([['Staff', '#/overview'], ['Clinic', '#/clinic'], [trialName(id), '']]);
+  setCrumbs([['Staff', '#/overview'], ['Clinical trials', '#/clinic'], [trialName(id), '']]);
   Widgets.baseTitle = `${trialName(id)} · TrialTalk Staff`; setTitle();
   $('#trialMeta').innerHTML = [st.phase, st.condition, st.study_id || id].filter(Boolean).map(v => `<span class="tag">${esc(v)}</span>`).join('');
   $('#trialDesc').textContent = st.description || '';
