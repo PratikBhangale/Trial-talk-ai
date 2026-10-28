@@ -16,6 +16,8 @@
 <div class="app">
   <aside class="sidebar">
     <nav class="nav" aria-label="Staff portal">
+      <div class="group" aria-hidden="true">Enterprise</div>
+      <a href="#/clinic" data-route="clinic"><span data-icon="buildings"></span><span class="nl">Clinic</span></a>
       <div class="group" aria-hidden="true">Today</div>
       <a href="#/overview" data-route="overview"><span data-icon="overview"></span><span class="nl">Overview</span></a>
       <div class="group" aria-hidden="true">Care</div>
@@ -23,6 +25,7 @@
       <a href="#/participants" data-route="participants"><span data-icon="users"></span><span class="nl">Participants</span><span class="count hidden" id="navParticipants"></span></a>
       <a href="#/requests" data-route="requests"><span data-icon="inbox"></span><span class="nl">Requests</span><span class="count hidden" id="navRequests"></span></a>
       <div class="group" aria-hidden="true">Operations</div>
+      <a href="#/ask" data-route="ask"><span data-icon="chats"></span><span class="nl">Ask</span></a>
       <a href="#/team" data-route="team"><span data-icon="team"></span><span class="nl">Team</span></a>
       <a href="#/usage" data-route="usage"><span data-icon="usage"></span><span class="nl">Token usage</span></a>
       <a href="#/observability" data-route="observability"><span data-icon="activity"></span><span class="nl">Observability</span></a>
@@ -42,6 +45,35 @@
           <span data-icon="siren"></span><span id="alertBannerText"></span>
           <span class="btn small">Review alerts</span>
         </a>
+
+        <!-- ============================================================ clinic (every trial) -->
+        <section data-page="clinic" hidden aria-labelledby="h-clinic">
+          <div class="page-head">
+            <div>
+              <h1 id="h-clinic" tabindex="-1">Clinic</h1>
+              <p>Every trial with patients at your sites: who is talking to the study on WhatsApp, how dosing is going, and which symptoms the agent handled or escalated as urgent.</p>
+            </div>
+            <div class="actions"><button id="clinicRefresh" type="button"><span data-icon="refresh"></span>Refresh</button></div>
+          </div>
+          <div id="clinicKpis"></div>
+          <div class="panel-head clinic-head"><h2>Trials</h2><span class="tag" id="clinicCount"></span></div>
+          <div id="clinicTrials"></div>
+          <p class="note clinic-defs">Engaged and adherence cover the last 14 days: engaged means the patient messaged the study via WhatsApp (web chat does not count), adherence is doses taken of doses due.
+            Symptoms and alerts are all time: urgent symptoms alerted the team, the rest the agent logged on its own; alerts are emergency alerts.</p>
+        </section>
+
+        <!-- ============================================================ one trial -->
+        <section data-page="trial" hidden aria-labelledby="h-trial">
+          <a class="back-link" href="#/clinic"><span data-icon="arrow-left"></span>All trials</a>
+          <div class="page-head">
+            <div>
+              <h1 id="h-trial" tabindex="-1">Trial</h1>
+              <div class="meta" id="trialMeta"></div>
+              <p id="trialDesc"></p>
+            </div>
+          </div>
+          <div id="trialBody"></div>
+        </section>
 
         <!-- ============================================================ overview -->
         <section data-page="overview" class="overview" aria-labelledby="h-overview">
@@ -323,9 +355,41 @@
           </dialog>
 
           <div class="panel section-gap">
-            <div class="panel-head"><h2>Behavior drift</h2><span class="tag">Last 24 h vs the 7 days before</span></div>
+            <div class="panel-head"><h2>Behavior drift</h2><span class="tag" id="obsDriftTag">Last 24 h vs the 7 days before</span></div>
             <p class="panel-note">Whether the agent behaves differently today. Red means a change in the direction that hurts (slower, fewer knowledge-base lookups, more escalations); token and length changes are shown without a verdict.</p>
             <div id="obsDrift"></div>
+          </div>
+        </section>
+
+        <!-- ============================================================ ask -->
+        <section data-page="ask" hidden aria-labelledby="h-ask">
+          <div class="page-head">
+            <div>
+              <h1 id="h-ask" tabindex="-1">Ask</h1>
+              <p>Ask about your trials in plain words. The assistant reads the same data as this portal, only at your sites, and changes nothing.</p>
+            </div>
+          </div>
+          <div class="chat-window ask-window">
+            <div class="chat-top">
+              <span class="avatar" aria-hidden="true">TT</span>
+              <div><b>TrialTalk assistant</b><span>Answers from trial data at your sites. Check anything you act on.</span></div>
+              <span class="spacer"></span>
+              <button type="button" class="small ghost" id="askClear" hidden>New conversation</button>
+            </div>
+            <div class="chat" id="askLog" role="log" aria-label="Conversation with the assistant" tabindex="0"></div>
+            <form class="composer" id="askForm" novalidate>
+              <div class="chat-suggest" id="askSuggest" aria-label="Suggestions">
+                <button type="button" class="chip-btn" data-ask="Which trial has the most open emergency alerts?">Which trial has the most open emergency alerts?</button>
+                <button type="button" class="chip-btn" data-ask="Who hasn't messaged on WhatsApp in the last two weeks?">Who hasn't messaged on WhatsApp lately?</button>
+                <button type="button" class="chip-btn" data-ask="How is dose adherence across my trials?">How is dose adherence across my trials?</button>
+              </div>
+              <div class="composer-row">
+                <label class="sr-only" for="askText">Question</label>
+                <input id="askText" placeholder="Ask about your trials" autocomplete="off" maxlength="1000" aria-describedby="askHint">
+                <button class="primary" id="askSend" aria-label="Send question"><span data-icon="send"></span>Send</button>
+              </div>
+              <p class="ask-hint" id="askHint" aria-live="polite"></p>
+            </form>
           </div>
         </section>
       </div>
@@ -334,6 +398,7 @@
   </div>
 </div>
 
+<script type="module" src="/ui/orb.js"></script>
 <script src="/ui/common.js"></script>
 <script src="/ui/charts.js"></script>
 <script src="/ui/widgets.js"></script>
@@ -341,19 +406,22 @@
 const state = { pid: null, tab: 'events', reminders: [], me: null, page: 'overview' };
 
 // ------------------------------------------------------------ pages (hash routes)
-const ROUTES = { overview: 'Overview', alerts: 'Emergency alerts', participants: 'Participants', requests: 'Requests',
+const ROUTES = { clinic: 'Clinic', ask: 'Ask', overview: 'Overview', alerts: 'Emergency alerts', participants: 'Participants', requests: 'Requests',
   team: 'Team', usage: 'Token usage', observability: 'Observability' };
 
 function route(moveFocus) {
   const [, want, sub] = /^#\/(\w+)(?:\/([^/]+))?/.exec(location.hash) || [];
   // #/participants/<id>: one participant as a full page, under Participants in the sidebar and the breadcrumbs.
-  const page = want === 'participants' && sub ? 'participant' : ROUTES[want] ? want : 'overview';
-  const navPage = page === 'participant' ? 'participants' : page;
+  // #/clinic/<study_id>: one trial, under Clinic.
+  const page = want === 'participants' && sub ? 'participant' : want === 'clinic' && sub ? 'trial' : ROUTES[want] ? want : 'overview';
+  const navPage = { participant: 'participants', trial: 'clinic' }[page] || page;
+  const trialId = page === 'trial' ? decodeURIComponent(sub) : null;
   state.page = page;
   closeSheet(page === 'participant');
   if (page !== 'observability' && $('#traceSheet').open) $('#traceSheet').close();
   $$('[data-page]').forEach(s => { s.hidden = s.dataset.page !== page; });
   setCrumbs(page === 'participant' ? [['Staff', '#/overview'], ['Participants', '#/participants'], [state.pid === decodeURIComponent(sub) && state.detailName ? state.detailName : decodeURIComponent(sub), '']]
+    : page === 'trial' ? [['Staff', '#/overview'], ['Clinic', '#/clinic'], [trialName(trialId), '']]
     : [['Staff', '#/overview'], [ROUTES[page], '']]);
   if (page === 'participant' && TT.user) showDetail(decodeURIComponent(sub), 'page');
   $$('.nav a').forEach(a => {
@@ -368,11 +436,14 @@ function route(moveFocus) {
     const c = cur.getBoundingClientRect(), n = nav.getBoundingClientRect();
     nav.scrollTo({ left: nav.scrollLeft + (c.left - n.left) - (n.width - c.width) / 2 });
   });
-  Widgets.baseTitle = `${page === 'participant' ? state.detailName || 'Participant' : ROUTES[page]} · TrialTalk Staff`;
+  Widgets.baseTitle = `${page === 'participant' ? state.detailName || 'Participant' : page === 'trial' ? trialName(trialId) : ROUTES[page]} · TrialTalk Staff`;
   setTitle(); syncBanner();
   if (moveFocus) { $(`#h-${page}`)?.focus(); window.scrollTo(0, 0); }
   if (page === 'overview' && TT.user) loadOverview();
   if (page === 'observability' && TT.user) loadObs();
+  if (page === 'clinic' && TT.user) loadClinic();
+  if (page === 'trial' && TT.user) loadTrial(trialId);
+  if (page === 'ask' && moveFocus) $('#askText').focus();
 }
 addEventListener('hashchange', () => route(true));
 

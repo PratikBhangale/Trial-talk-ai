@@ -6,6 +6,7 @@ const Widgets = { timers: [], alertScope: 'active', seen: null, baseTitle: docum
 function startWidgets() {
   stopWidgets();
   Widgets.seen = null;
+  Widgets.ask.history = []; askWelcome();   // a conversation belongs to the account that had it
   loadAlerts(); loadTeam(); loadUsage();
   // Observability polls only while its page is open and the tab is visible: it is the heaviest query set.
   Widgets.timers = [setInterval(loadAlerts, 4000), setInterval(() => obsActive() && loadObs(), 5000), setInterval(loadUsage, 15000)];
@@ -379,8 +380,13 @@ function failureCallout(failed, t0) {
 const DRIFT_FMT = { tokens_in_per_reply: v => nf(Math.round(v)), tokens_out_per_reply: v => nf(Math.round(v)), agent_p95_ms: dur,
   reply_length_chars: v => nf(Math.round(v)), kb_search_rate: v => `${Math.round(v * 100)}%`, escalation_rate: v => `${(v * 100).toFixed(1)}%` };
 const DRIFT_UNIT = { tokens_in_per_reply: 'tokens', tokens_out_per_reply: 'tokens', reply_length_chars: 'characters' };
+// baseline_kind "rolling_7d_avg": the baseline is the average of the 7 daily values before today, and says so.
+const DRIFT_BASE = { rolling_7d_avg: { tag: 'Last 24 h vs 7-day rolling avg', card: '7-day rolling avg', vs: 'the 7-day rolling average' } };
+const DRIFT_BASE_DEFAULT = { tag: 'Last 24 h vs the 7 days before', card: 'Baseline', vs: 'the 7 days before' };
 function renderDrift(metrics) {
   const any = metrics.some(m => m.current !== null || m.baseline !== null);
+  const baseOf = m => DRIFT_BASE[m.baseline_kind] || DRIFT_BASE_DEFAULT;
+  $('#obsDriftTag').textContent = (metrics[0] ? baseOf(metrics[0]) : DRIFT_BASE_DEFAULT).tag;
   renderStable($('#obsDrift'), any ? `<div class="drift-grid">${metrics.map(m => {
     const f = DRIFT_FMT[m.key] || nf, show = v => v === null ? '—' : f(v), c = m.change_pct;
     let tone = 'tone-neutral', verdict = 'no better or worse direction';
@@ -391,13 +397,254 @@ function renderDrift(metrics) {
       tone = worse ? 'tone-bad' : 'tone-ok'; verdict = worse ? 'worse' : 'better';
     }
     const badge = c === null ? `<span class="pill tone-neutral">${m.current === null ? 'No data today' : 'No baseline'}</span>`
-      : `<span class="pill ${tone}" title="${esc(humanize(verdict))}, compared with the 7 days before"><span aria-hidden="true">${c > 0 ? '▲' : c < 0 ? '▼' : '–'}</span>${esc(Math.abs(c).toFixed(1))}%<span class="sr-only">${c > 0 ? ' up' : c < 0 ? ' down' : ''}, ${esc(verdict)}</span></span>`;
+      : `<span class="pill ${tone}" title="${esc(humanize(verdict))}, compared with ${esc(baseOf(m).vs)}"><span aria-hidden="true">${c > 0 ? '▲' : c < 0 ? '▼' : '–'}</span>${esc(Math.abs(c).toFixed(1))}%<span class="sr-only">${c > 0 ? ' up' : c < 0 ? ' down' : ''}, ${esc(verdict)}</span></span>`;
     return `<article class="drift-card">
       <div class="drift-top"><h3>${esc(m.label.replace(/ \((ms|chars)\)$/, ''))}</h3>${badge}</div>
       <b class="drift-now">${esc(show(m.current))}${m.current !== null && DRIFT_UNIT[m.key] ? `<small>${esc(DRIFT_UNIT[m.key])}</small>` : ''}</b>
-      <span class="drift-base">Baseline ${esc(show(m.baseline))}</span>
+      <span class="drift-base">${esc(baseOf(m).card)} ${esc(show(m.baseline))}</span>
     </article>`; }).join('')}</div>`
     : emptyState('activity', 'Not enough history yet', 'Drift compares the last 24 hours with the 7 days before. It fills in once the agent has replied in both windows.'));
+}
+
+// ------------------------------------------------------------ clinic: every trial, then one trial
+// GET /staff/clinic and /staff/clinic/{study_id}. Aggregates only, under the caller's site scope (a trial with no
+// patients at the caller's sites is a 404). Percentages arrive as 0-100; adherence is null when no dose was due.
+// Loaded when the page opens (and on Refresh): no polling.
+const pctText = v => v === null || v === undefined ? '—' : `${Math.round(+v)}%`;
+const plural = (n, one, many = one + 's') => `${nf(n)} ${+n === 1 ? one : many}`;
+Widgets.trials = {};   // study_id -> name, so breadcrumbs and the tab title name the trial before it loads
+
+function trialName(id) { return Widgets.trials[id] || id || 'Trial'; }
+
+// A trial's symptoms in two parts: logged by the agent on its own, and urgent ones that alerted the team.
+// A bar for the proportion, the counts in words beside it, so the split never rests on colour alone.
+function symptomSplit(t) {
+  const handled = Math.max(0, +t.agent_handled || 0), urgent = Math.max(0, (+t.symptoms || 0) - handled);
+  if (!+t.symptoms) return `<div class="split"><div class="stack-bar" role="img" aria-label="No symptoms reported"><i class="sb-empty"></i></div>
+    <div class="site-legend"><span>No symptoms reported yet</span></div></div>`;
+  return `<div class="split">
+    <div class="stack-bar" role="img" aria-label="${nf(t.symptoms)} symptoms: ${nf(handled)} handled by the agent, ${nf(urgent)} urgent">
+      ${handled ? `<i class="sb-agent" style="flex-grow:${handled}"></i>` : ''}${urgent ? `<i class="sb-bad" style="flex-grow:${urgent}"></i>` : ''}</div>
+    <div class="site-legend"><span><i class="sb-agent"></i>${nf(handled)} handled by the agent</span><span><i class="sb-bad"></i>${nf(urgent)} urgent</span></div></div>`;
+}
+
+async function loadClinic(loud) {
+  if (!TT.user) return;
+  if (!$('#clinicTrials').childElementCount) { $('#clinicKpis').innerHTML = skeleton(2); $('#clinicTrials').innerHTML = skeleton(4); }
+  let o;
+  try { o = await api('GET', '/staff/clinic', undefined, { quiet: !loud }); }
+  catch {
+    $('#clinicKpis').innerHTML = ''; $('#clinicCount').textContent = '';
+    $('#clinicTrials').innerHTML = `<div class="panel">${emptyState('alert', 'Unable to load the clinic', 'Choose Refresh to try again.')}</div>`;
+    return;
+  }
+  const s = o.summary || {}, trials = o.trials || [];
+  trials.forEach(t => { Widgets.trials[t.study_id] = t.name; });
+  const notEng = +s.pct_not_engaging || 0;
+  $('#clinicKpis').innerHTML = `<div class="kpis clinic-kpis">
+    <div class="kpi"><span>Trials</span><b>${nf(s.trials)}</b><small>With patients at your sites</small></div>
+    <div class="kpi"><span>Patients</span><b>${nf(s.patients)}</b><small>Withdrawn and screen-failed excluded</small></div>
+    <div class="kpi ${s.patients && notEng >= 25 ? 'tone-warn' : ''}" title="Patients with no message to the study via WhatsApp in the last 14 days. Web chat does not count."><span>Not engaging on WhatsApp (14&nbsp;d)</span><b>${s.patients ? pctText(notEng) : '—'}</b><small>No message via WhatsApp in 14 days</small></div>
+    <a class="kpi ${s.critical_open ? 'tone-bad' : ''}" href="#/alerts"><span>Open emergency alerts</span><b>${nf(s.critical_open)}</b><small>${s.critical_open ? 'Waiting for the team' : 'All clear'}</small></a>
+  </div>`;
+  $('#clinicCount').textContent = trials.length ? plural(trials.length, 'trial') : '';
+  $('#clinicTrials').innerHTML = trials.length ? `<div class="trial-grid">${trials.map(trialCard).join('')}</div>`
+    : `<div class="panel">${emptyState('buildings', 'No trials yet', 'A trial appears here once one of its patients is enrolled at your sites.')}</div>`;
+}
+
+function trialCard(t) {
+  const id = esc(t.study_id), adh = t.adherence_pct;
+  return `<a class="trial-card" href="#/clinic/${esc(encodeURIComponent(t.study_id))}">
+    <div class="trial-top"><h3>${esc(t.name)}</h3>${icon('chevron', 'sm')}</div>
+    <div class="tag-list">${t.phase ? `<span class="tag">${esc(t.phase)}</span>` : ''}<span class="tag">${id}</span></div>
+    ${t.condition ? `<p class="trial-cond">${esc(t.condition)}</p>` : ''}
+    <dl class="trial-stats">
+      <div><dt>Patients</dt><dd>${nf(t.patients)}</dd><small>Now</small></div>
+      <div title="Messaged the study via WhatsApp in the last 14 days"><dt>Engaged</dt><dd>${t.patients ? pctText(t.engaged_pct) : '—'}</dd><small>14 d</small></div>
+      <div title="${adh === null ? 'No doses due in the last 14 days' : 'Doses taken of doses due, last 14 days'}"><dt>Adherence</dt><dd>${pctText(adh)}</dd><small>14 d</small></div>
+      <div title="Emergency alerts raised in this trial, all time"><dt>Alerts</dt><dd class="${+t.critical ? 'is-bad' : ''}">${nf(t.critical)}</dd><small>All time</small></div>
+    </dl>
+    <div class="trial-sym"><span class="trial-sym-label">${plural(t.symptoms, 'symptom')} <span class="muted">· all time</span></span>${symptomSplit(t)}</div>
+  </a>`;
+}
+
+async function loadTrial(id) {
+  if (!TT.user || !id) return;
+  Widgets.trialId = id;
+  const body = $('#trialBody');
+  $('#h-trial').textContent = trialName(id);
+  $('#trialMeta').innerHTML = `<span class="tag">${esc(id)}</span>`;
+  $('#trialDesc').textContent = '';
+  body.innerHTML = skeleton(5);
+  let o;
+  try { o = await api('GET', `/staff/clinic/${pathSeg(id)}`, undefined, { quiet: true }); }
+  catch (e) {
+    if (Widgets.trialId !== id) return;
+    body.innerHTML = `<div class="panel">${e.status === 404
+      ? emptyState('search', 'Trial not found', 'None of its patients are at your sites, or the link is out of date.', '<a class="btn small" href="#/clinic">Back to all trials</a>')
+      : emptyState('alert', 'Unable to load this trial', 'Try again in a moment.', '<a class="btn small" href="#/clinic">Back to all trials</a>')}</div>`;
+    return;
+  }
+  if (Widgets.trialId !== id || state.page !== 'trial') return;   // a response for a trial already left
+  const st = o.study || {}, t = o.summary || {}, eng = o.engagement || { engaged: 0, not_engaging: 0 };
+  Widgets.trials[id] = st.name || id;
+  $('#h-trial').textContent = trialName(id);
+  setCrumbs([['Staff', '#/overview'], ['Clinic', '#/clinic'], [trialName(id), '']]);
+  Widgets.baseTitle = `${trialName(id)} · TrialTalk Staff`; setTitle();
+  $('#trialMeta').innerHTML = [st.phase, st.condition, st.study_id || id].filter(Boolean).map(v => `<span class="tag">${esc(v)}</span>`).join('');
+  $('#trialDesc').textContent = st.description || '';
+  const crit = o.critical_list || [], open = crit.filter(a => a.status !== 'resolved').length;
+  body.innerHTML = `<div class="kpis">
+      <div class="kpi"><span>Patients</span><b>${nf(t.patients)}</b><small>Withdrawn and screen-failed excluded</small></div>
+      <div class="kpi"><span>Engaged on WhatsApp (14&nbsp;d)</span><b>${t.patients ? pctText(t.engaged_pct) : '—'}</b><small>Messaged via WhatsApp in the last 14 days</small></div>
+      <div class="kpi"><span>Dose adherence (14&nbsp;d)</span><b>${pctText(t.adherence_pct)}</b><small>${t.adherence_pct === null ? 'No doses due in 14 days' : 'Taken of due, last 14 days'}</small></div>
+      <div class="kpi"><span>Symptoms (all time)</span><b>${nf(t.symptoms)}</b><small>${nf(t.agent_handled)} handled by the agent, ${nf(Math.max(0, t.symptoms - t.agent_handled))} urgent</small></div>
+      <div class="kpi ${+t.critical ? 'tone-bad' : ''}"><span>Emergency alerts (all time)</span><b>${nf(t.critical)}</b><small>${open ? `${nf(open)} open among the newest ${nf(crit.length)}` : crit.length ? `None of the newest ${nf(crit.length)} open` : 'None raised'}</small></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Symptoms per day</h2><span class="tag">Last 14 days · UTC</span></div>
+      <p class="panel-note">Each symptom a patient reported, by day. Urgent ones alerted the study team; the rest the agent logged and answered on its own.</p>
+      <div id="trialChart"></div>
+    </div>
+    <div class="cols-2 even section-gap">
+      <div class="panel">
+        <div class="panel-head"><h2>Emergency alerts</h2>${crit.length ? `<span class="tag">Newest ${nf(crit.length)} · all time</span>` : ''}<div class="actions"><a href="#/alerts">Review alerts</a></div></div>
+        ${crit.length ? `<ul class="list">${crit.map(a => `<li class="alert-row">
+            <div class="list-main"><b><a href="#/participants/${esc(encodeURIComponent(a.participant_id))}">${esc(a.full_name || a.participant_id)}</a></b>
+              <span>${esc(a.participant_id)}</span></div>
+            <div class="list-side">${chip(a.status)}<time datetime="${esc(a.created_at)}" title="${esc(when(a.created_at))}">${esc(ago(a.created_at))}</time></div></li>`).join('')}</ul>`
+          : emptyState('check', 'No emergency alerts', 'No patient in this trial has raised an emergency alert.')}
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>WhatsApp engagement</h2></div>
+        <p class="panel-note">Last 14 days. Engaged means the patient sent the study at least one message via WhatsApp; web chat does not count.</p>
+        ${engagementSplit(eng)}
+      </div>
+    </div>`;
+  const days = o.symptoms_by_day || [], x = days.map(d => Date.parse(d.day + 'T00:00:00Z'));
+  const total = days.reduce((n, d) => n + (+d.total || 0), 0), urgent = days.reduce((n, d) => n + (+d.critical || 0), 0);
+  obsChart($('#trialChart'), 'bars', {
+    x, step: 86400000, stacked: true, integer: true, yLabel: 'Symptoms', xTitle: 'Day',
+    label: `Symptoms reported per day over the last 14 days: ${total} in total, ${urgent} urgent symptoms.`,
+    series: [{ name: 'Handled by the agent', color: '--ch-1', values: days.map(d => Math.max(0, (+d.total || 0) - (+d.critical || 0))) },
+      { name: 'Urgent symptoms', color: '--bad-solid', values: days.map(d => +d.critical || 0) }],
+    xFormat: d => dayFmt.format(d), tipFormat: d => dayFmt.format(d),
+  }, total ? '' : emptyState('activity', 'No symptoms in the last 14 days', 'Symptoms patients report over WhatsApp or the participant site appear here by day.'));
+}
+
+function engagementSplit({ engaged, not_engaging: quiet }) {
+  const all = (+engaged || 0) + (+quiet || 0);
+  if (!all) return emptyState('users', 'No patients yet', 'Engagement shows once patients are enrolled in this trial.');
+  const pc = n => `${Math.round(n / all * 100)}%`;
+  return `<div class="engage">
+    <div class="engage-figs">
+      <div><b>${nf(engaged)}</b><span><i class="sb-agent"></i>Engaged · ${pc(engaged)}</span></div>
+      <div><b>${nf(quiet)}</b><span><i class="sb-neutral"></i>Not engaging · ${pc(quiet)}</span></div>
+    </div>
+    <div class="stack-bar engage-bar" role="img" aria-label="${nf(engaged)} engaged, ${nf(quiet)} not engaging, of ${nf(all)} patients">
+      ${engaged ? `<i class="sb-agent" style="flex-grow:${engaged}"></i>` : ''}${quiet ? `<i class="sb-neutral" style="flex-grow:${quiet}"></i>` : ''}</div>
+    ${quiet ? `<p class="note">${plural(quiet, 'patient has', 'patients have')} not messaged in 14 days. A check-in call can catch a dropout early.</p>`
+      : '<p class="note">Every patient has messaged in the last 14 days.</p>'}
+  </div>`;
+}
+
+// ------------------------------------------------------------ ask: questions about the trials, answered by the agent
+// POST /staff/ask { question, history } -> { answer, tool_calls: [{ tool, summary }], usage }. One request per question,
+// never polled. The last ASK_TURNS messages go along as history so a follow-up ("and at Lakeview?") has context.
+const ASK_TURNS = 10;
+Widgets.ask = { history: [], busy: false };
+
+function askBubble(text, who, extra = '') {
+  const b = document.createElement('div');
+  b.className = `bubble ${who === 'user' ? 'in' : 'out'} new ${extra}`.trim();
+  b.textContent = text;
+  $('#askLog').append(b);
+  return b;
+}
+function askScroll() { const log = $('#askLog'); log.scrollTop = log.scrollHeight; }
+
+function askWelcome() {
+  $('#askLog').innerHTML = '';
+  askBubble('Ask me about your trials: who has stopped messaging, which trial has open emergency alerts, how adherence is going. I only read data from your sites.', 'assistant');
+  $('#askClear').hidden = true; $('.ask-window').classList.remove('started');
+}
+
+// Under each answer: what the assistant looked at (expandable), and the tokens it used.
+function askMeta(out) {
+  const calls = Array.isArray(out.tool_calls) ? out.tool_calls : [];
+  const u = out.usage || {};
+  const tin = +(u.input_tokens ?? u.inputTokens ?? 0), tout = +(u.output_tokens ?? u.outputTokens ?? 0);
+  const tokens = +(u.total_tokens ?? u.totalTokens ?? 0) || tin + tout;
+  const tools = [...new Set(calls.map(c => c.tool).filter(Boolean))];
+  if (!tools.length && !tokens) return '';
+  return `<div class="ask-meta">
+    ${tools.length ? `<details><summary>Looked at: ${esc(tools.join(', '))}</summary>
+      <ul>${calls.map(c => `<li><b>${esc(c.tool)}</b>${c.summary ? `<span>${esc(c.summary)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}
+    ${tokens ? `<small class="num">${nf(tokens)} tokens${tin || tout ? ` · ${nf(tin)} in, ${nf(tout)} out` : ''}</small>` : ''}
+  </div>`;
+}
+
+function askBusy(on) {
+  Widgets.ask.busy = on;
+  $('#askSend').disabled = on; $('#askText').readOnly = on;
+  $$('#askSuggest button').forEach(b => { b.disabled = on; });
+  $('#askLog').setAttribute('aria-busy', on);
+}
+
+async function sendAsk(text) {
+  const question = String(text || '').trim();
+  const hint = $('#askHint');
+  if (Widgets.ask.busy) return;
+  if (!question) { hint.textContent = 'Type a question first, or choose one of the suggestions.'; $('#askText').focus(); return; }
+  hint.textContent = '';
+  $('#askText').value = '';
+  askBubble(question, 'user');
+  $('#askClear').hidden = false; $('.ask-window').classList.add('started');   // phones: suggestions give way to the conversation
+  const wait = askBubble('', 'assistant', 'thinking');
+  wait.innerHTML = '<canvas class="orb" aria-hidden="true"></canvas><span>Looking through your trials</span>';
+  const stopOrb = window.mountOrb ? window.mountOrb($('canvas', wait)) : () => {};
+  askScroll(); askBusy(true);
+  try {
+    const out = await api('POST', '/staff/ask', { question, history: Widgets.ask.history.slice(-ASK_TURNS) }, { quiet: true });
+    stopOrb(); wait.remove();
+    const answer = String(out.answer || '').trim() || 'I could not find an answer to that in your trial data.';
+    askBubble(answer, 'assistant');
+    $('#askLog').insertAdjacentHTML('beforeend', askMeta(out));
+    Widgets.ask.history.push({ role: 'user', text: question }, { role: 'assistant', text: answer });
+    Widgets.ask.history = Widgets.ask.history.slice(-ASK_TURNS);
+  } catch (e) {
+    stopOrb(); wait.remove();
+    // The question is not added to the history: it was never answered.
+    const msg = e.status === 502 ? 'The assistant took too long or could not be reached. Nothing was lost: try the question again in a moment.'
+      : e.status === 403 ? 'Your account does not have access to Ask. A PI or coordinator can check your role on the Team page.'
+      : e.status === 400 ? `That question could not be sent: ${e.message || 'check it and try again'}.`
+      : e.message === 'signed out' ? 'You are signed out. Sign in again to ask.'
+      : 'Unable to reach the assistant. Check your connection and try again.';
+    const b = askBubble(msg, 'assistant', 'ask-error');
+    if (e.status !== 403 && e.message !== 'signed out') {
+      b.insertAdjacentHTML('afterend', `<div class="bubble-actions"><button type="button" class="small" data-ask-retry="${esc(question)}">${icon('refresh', 'sm')}Try again</button></div>`);
+    }
+  } finally {
+    askBusy(false); askScroll();
+    if (state.page === 'ask' && !matchMedia('(pointer: coarse)').matches) $('#askText').focus();
+  }
+}
+
+function wireClinic() {
+  $('#clinicRefresh').onclick = () => loadClinic(true);
+  askWelcome();
+  $('#askForm').onsubmit = e => { e.preventDefault(); sendAsk($('#askText').value); };
+  $('#askText').addEventListener('input', () => { $('#askHint').textContent = ''; });
+  $('#askSuggest').onclick = e => { const b = e.target.closest('[data-ask]'); if (b) sendAsk(b.dataset.ask); };
+  $('#askLog').addEventListener('click', e => {
+    const r = e.target.closest('[data-ask-retry]'); if (!r || Widgets.ask.busy) return;
+    // Retry replaces the failed exchange (the question and the error) rather than repeating the question below it.
+    const actions = r.closest('.bubble-actions'), err = actions.previousElementSibling, asked = err?.previousElementSibling;
+    if (err?.classList.contains('ask-error')) err.remove();
+    if (asked?.classList.contains('in')) asked.remove();
+    actions.remove(); sendAsk(r.dataset.askRetry);
+  });
+  $('#askClear').onclick = () => { if (Widgets.ask.busy) return; Widgets.ask.history = []; askWelcome(); $('#askText').focus(); };
 }
 
 // ------------------------------------------------------------ token usage
@@ -511,6 +758,7 @@ async function teamAction(action, username) {
 }
 
 function wireWidgets() {
+  wireClinic();
   $('#alertTabs').onclick = e => { const b = e.target.closest('[data-scope]'); if (b) { Widgets.alertScope = b.dataset.scope; loadAlerts(); } };
   $('#usageDays').onchange = loadUsage;
   $('#obsRefresh').onclick = () => loadObs(true);

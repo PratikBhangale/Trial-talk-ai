@@ -593,6 +593,73 @@ button.kpi:focus-visible { outline-offset: -2px; border-radius: 0; }
 .drift-now small { font-size: var(--fs-meta); font-weight: var(--fw-normal); color: var(--text-2); letter-spacing: 0; margin-inline-start: 6px; }
 .drift-base { font-size: var(--fs-xs); color: var(--text-3); }
 
+/* ---------------------------------------------------------------- clinic: every trial, one trial
+   Trial cards are links: name, tags, four figures, then the symptom split (a bar plus its counts in words). The
+   agent-handled share wears the first chart colour; urgent wears the reserved red, as on the trial's day chart. */
+.sb-agent { background: var(--ch-1); }
+.clinic-head { margin-bottom: 16px; }
+.clinic-head .tag { margin-inline-start: auto; }
+.clinic-defs { max-width: 80ch; margin-top: 24px; }
+.trial-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.trial-card { display: grid; gap: 12px; align-content: start; padding: var(--s-card); border-radius: var(--r-lg); background: var(--surface); color: var(--text);
+  text-decoration: none; min-width: 0; box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+  transition-property: box-shadow, translate; transition-duration: var(--dur-enter); transition-timing-function: var(--ease-out); }
+.trial-card:hover { color: var(--text); }
+@media (hover: hover) and (pointer: fine) { .trial-card:hover { box-shadow: var(--shadow-md), 0 0 0 1px var(--accent-line); } }
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) { .trial-card:hover { translate: 0 -2px; } }
+.trial-card:focus-visible { border-radius: var(--r-lg); }
+.trial-top { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.trial-top h3 { font-size: var(--fs-body); line-height: 1.4; overflow-wrap: anywhere; }
+.trial-top .icon { color: var(--text-3); margin-top: 2px; }
+.trial-cond { font-size: var(--fs-meta); color: var(--text-2); margin-top: -4px; }
+.trial-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 4px 0 0; padding: 12px 0; border-block: 1px solid var(--border); }
+.trial-stats div { display: grid; gap: 2px; min-width: 0; }
+.trial-stats dt { font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trial-stats dd { margin: 0; font-size: var(--fs-h2); font-weight: var(--fw-strong); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.trial-stats dd.is-bad { color: var(--bad); }
+.trial-stats small { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }   /* the window each figure covers */
+.trial-sym { display: grid; gap: 8px; }
+.trial-sym-label { font-size: var(--fs-meta); font-weight: var(--fw-medium); }
+.split { display: grid; gap: 8px; }
+@container main (max-width: 420px) { .trial-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.back-link { display: inline-flex; align-items: center; gap: 6px; margin: -8px 0 16px -6px; padding: 4px 6px; border-radius: 6px;
+  color: var(--text-2); font-size: var(--fs-meta); font-weight: var(--fw-medium); text-decoration: none; }
+.back-link:hover { color: var(--text); background: var(--surface-3); }
+.back-link .icon { width: 16px; height: 16px; }
+[data-page="trial"] .page-head .meta { margin-top: 10px; }
+[data-page="trial"] .panel-head > .tag { margin-inline-start: auto; }
+[data-page="trial"] .panel-head > .tag + .actions { margin-inline-start: 0; }
+.engage { display: grid; gap: 16px; }
+.engage-figs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.engage-figs div { display: grid; gap: 4px; }
+.engage-figs b { font-size: var(--fs-h1); line-height: 1.15; font-weight: var(--fw-strong); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.engage-figs span { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-meta); color: var(--text-2); }
+.engage-figs i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.engage-bar { height: 12px; }
+.engage .note { margin-top: 0; }
+
+/* ---------------------------------------------------------------- ask: the participant chat window, for staff questions */
+.ask-window .chat-top .small { flex-shrink: 0; }
+.ask-meta { align-self: flex-start; display: grid; gap: 4px; max-width: min(72%, 600px); margin-top: -4px; padding-inline-start: 4px;
+  font-size: var(--fs-xs); color: var(--text-3); }
+.ask-meta summary { width: fit-content; cursor: pointer; color: var(--text-2); border-radius: 4px; overflow-wrap: anywhere; }
+.ask-meta summary:hover { color: var(--text); }
+.ask-meta ul { list-style: none; margin: 6px 0 2px; padding: 8px 12px; display: grid; gap: 6px; border-radius: var(--r-sm); background: var(--surface-2); }
+.ask-meta li { display: grid; gap: 2px; overflow-wrap: anywhere; }
+.ask-meta li b { color: var(--text); font-weight: var(--fw-medium); }
+.ask-meta li span { color: var(--text-2); }
+.bubble.ask-error { background: var(--surface); box-shadow: inset 0 0 0 1px var(--warn-line); color: var(--text); }
+.ask-hint { font-size: var(--fs-meta); color: var(--warn); min-height: 0; }
+.ask-hint:empty { display: none; }
+@container main (max-width: 520px) {
+  .ask-meta { max-width: 88%; }
+  .ask-window .chat-top { flex-wrap: wrap; row-gap: 8px; }
+  .ask-window .chat-top > div { flex: 1 1 180px; }
+  .ask-window .chat-top .spacer { display: none; }
+  .ask-window .chat-top .small { margin-inline-start: auto; }
+  .ask-window.started .chat-suggest { display: none; }
+}
+
 /* ---------------------------------------------------------------- empty, loading */
 .empty { display: grid; justify-items: center; text-align: center; gap: 8px; padding: 32px 16px; color: var(--text-2); }
 .empty .icon { width: 28px; height: 28px; color: var(--text-3); margin-bottom: 4px; }
