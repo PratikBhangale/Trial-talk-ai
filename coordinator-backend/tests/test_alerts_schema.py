@@ -105,3 +105,22 @@ def test_other_roles_cannot_delete_telemetry_spans(pg):
         with _connect(pg, user) as c:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 c.execute("DELETE FROM trial.telemetry_spans")
+
+
+def test_messaging_cannot_update_resolved_alert(pg, participant, admin):
+    admin.execute("INSERT INTO trial.emergency_alerts (participant_id, source, status) VALUES (%s, 'sos_button', "
+                  "'resolved')", (participant,))
+    with _connect(pg, "tt_messaging") as c:
+        n = c.execute("UPDATE trial.emergency_alerts SET press_count = press_count + 1").rowcount
+    assert n == 0  # RLS hides the resolved row from UPDATE
+
+
+def test_06_is_idempotent_and_policies_stay_split(pg, admin):
+    """Aurora already has the alerts table and policies, so 06 must apply cleanly a second time."""
+    from local_env import DB_SQL, run_sql_file
+    run_sql_file(admin, DB_SQL / "06_alerts_web.sql")
+    run_sql_file(admin, DB_SQL / "06_alerts_web.sql")
+    pols = admin.execute("SELECT policyname, cmd FROM pg_policies WHERE tablename = 'emergency_alerts' "
+                         "AND 'messaging_role' = ANY (roles) ORDER BY cmd").fetchall()
+    assert pols == [("messaging_insert", "INSERT"), ("messaging_select", "SELECT"), ("messaging_update", "UPDATE")]
+    assert admin.execute("SELECT count(*) FROM pg_indexes WHERE tablename = 'emergency_alerts'").fetchone()[0] == 3

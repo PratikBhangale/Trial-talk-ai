@@ -3,7 +3,7 @@
     TT_PG_BIN=<folder with initdb/pg_ctl> python coordinator-backend/devserver/server.py [--port 8787] [--real-agent]
                                                                                        [--seed-telemetry]
 
-Starts a throwaway PostgreSQL built from db/ (plus tests/pending_db_additions.sql), loads db/03_seed.sql, the
+Starts a throwaway PostgreSQL built from db/ (01, 02, 05, 06), loads db/03_seed.sql, the
 same synthetic data as the deployed database, adds synthetic staff, and serves:
 
     /staff, /participant            one page per portal (ui/*.html), as they will be deployed separately

@@ -176,7 +176,7 @@ TT_PG_BIN=.pg/Library/bin .pg/python -m pytest coordinator-backend/tests   # Lin
 
 The integration tests swap the RDS Data API for a fake that runs each statement on the local server, logged in as the same database user the Lambda would use (`tt_portal`, `tt_participant`, `tt_messaging`). That means grants, RLS and `set_config` scoping all get exercised, not mocked. The fakes and the Postgres setup are in `tests/local_env.py`.
 
-The local database is built from `db/01_schema.sql` and `db/02_roles_rls.sql`, the schema's source of truth, plus `tests/pending_db_additions.sql`. That last file holds what the participant website needs and db/ doesn't have yet: the `web` channel, participants reading their own web messages, web chat inserts and `trial.emergency_alerts`. It is applied locally only, never to Aurora. Without it, the chat, SOS, request and alert tests fail.
+The local database is built from `db/01_schema.sql` and `db/02_roles_rls.sql`, the schema's source of truth, plus `db/05_telemetry.sql` and `db/06_alerts_web.sql` (the `web` channel, participant web chat, `trial.emergency_alerts` and the router's alert rights).
 
 ### Test portals (local, no AWS)
 

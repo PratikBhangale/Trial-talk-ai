@@ -2,7 +2,7 @@
 
 Unit tests need nothing. Integration tests (test_api_*.py) need a local PostgreSQL 16:
 set TT_PG_BIN to the folder holding initdb/pg_ctl, and they start a throwaway server,
-build it from db/ (plus pending_db_additions.sql), and run the real handlers through a fake RDS Data API
+build it from db/ (01, 02, 05, 06), and run the real handlers through a fake RDS Data API
 that executes on that server as the same database logins the Lambdas use (see local_env.py).
 """
 
@@ -11,6 +11,8 @@ import os
 import types
 
 import pytest
+
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")  # lets boto3 clients be created without a configured region
 
 from local_env import FakeAgentCore, FakeCognito, FakeRdsData, FakeScheduler, FakeWhatsApp, LocalPostgres, wipe
 
