@@ -214,6 +214,32 @@ def test_span_garbage_traceparent_starts_fresh_trace():
     assert s["parent_id"] is None and len(s["trace_id"]) == 32
 
 
+def _simulate_no_sdk(monkeypatch):
+    """Make the module look like the SDK import failed: AVAILABLE False and the `trace` name absent."""
+    monkeypatch.setattr(telemetry, "AVAILABLE", False)
+    monkeypatch.setattr(telemetry, "_state", {})
+    monkeypatch.delattr(telemetry, "trace", raising=False)
+
+
+def test_5xx_without_sdk_does_not_raise(monkeypatch):
+    _simulate_no_sdk(monkeypatch)
+    from common.http import Router
+    r = Router()
+
+    @r.route("GET", "/boom")
+    def boom(event, claims):
+        raise RuntimeError("secret detail")
+
+    event = {"rawPath": "/boom", "requestContext": {"http": {"method": "GET"}}, "headers": {}}
+    assert r.dispatch(event, lambda e: {})["statusCode"] == 500
+    with telemetry.request_span("GET", "/x") as s:
+        telemetry.finish_request(s, 503)  # no-op, must not raise NameError
+    assert telemetry.finish_request(telemetry._NullSpan(), 500) is None
+    assert telemetry.traceparent() is None and telemetry.context_from("00-" + "a" * 32 + "-" + "b" * 16 + "-01") is None
+    telemetry.count("trialtalk.x")
+    telemetry.flush()
+
+
 def test_span_accepts_new_args_without_sdk(monkeypatch):
     monkeypatch.setattr(telemetry, "AVAILABLE", False)
     monkeypatch.setattr(telemetry, "_state", {})

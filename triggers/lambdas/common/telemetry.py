@@ -373,7 +373,7 @@ def request_span(method: str, route: str, headers: dict | None = None):
 
 def finish_request(s, status: int) -> None:
     s.set_attribute("http.response.status_code", status)
-    if status >= 500:
+    if status >= 500 and AVAILABLE:  # `trace` only exists when the SDK imported
         s.set_status(trace.Status(trace.StatusCode.ERROR, f"HTTP {status}"))
 
 
