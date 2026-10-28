@@ -60,11 +60,19 @@ class Router:
         """Serve another module's routes from this router (one Lambda, several files)."""
         self.routes += other.routes
 
+    # Status polls, not business traffic: the participant page re-checks its open report every few seconds,
+    # so tracing these would drown real requests in the traces list, the request chart and the rhythm heatmap
+    # (the same reason tt-staff-api runs with TELEMETRY_DB_SINK=0). The POST — the actual press — stays traced,
+    # and polls still reach the Lambda logs.
+    UNTRACED = {("GET", "/me/emergency")}
+
     def dispatch(self, event: dict, claims_fn: Callable[[dict], dict]) -> dict:
         method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
         path = event.get("rawPath", "/")
         template = next((tpl for m, pattern, _, tpl in self.routes if m == method and pattern.match(path)),
                         "unmatched")  # the route template, never the URL: ids stay out of telemetry
+        if (method, template) in self.UNTRACED:
+            return self._dispatch(event, claims_fn, method, path)
         try:
             with telemetry.request_span(method, template, event.get("headers")) as span:
                 resp = self._dispatch(event, claims_fn, method, path)

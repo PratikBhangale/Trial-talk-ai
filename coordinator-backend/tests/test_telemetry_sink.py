@@ -294,3 +294,27 @@ def test_telemetry_copies_identical():
     a = (ROOT / "coordinator-backend/lambdas/common/telemetry.py").read_bytes()
     b = (ROOT / "triggers/lambdas/common/telemetry.py").read_bytes()
     assert a == b
+
+
+@needs_sdk
+def test_emergency_status_poll_is_untraced():
+    """GET /me/emergency is the participant page's 4-second status poll: no request span, so an open tab
+    cannot drown the traces list or the request chart. The POST (the actual press) is traced like any route."""
+    telemetry.init(force=True)
+    from common.http import Router
+    r = Router()
+
+    @r.route("GET", "/me/emergency")
+    def poll(event, claims):
+        return 200, {"alerts": []}
+
+    @r.route("POST", "/me/emergency")
+    def press(event, claims):
+        return 201, {"ok": True}
+
+    def ev(method):
+        return {"rawPath": "/me/emergency", "requestContext": {"http": {"method": method}}, "headers": {}}
+    assert r.dispatch(ev("GET"), lambda e: {})["statusCode"] == 200
+    assert telemetry.snapshot()["spans"] == []
+    assert r.dispatch(ev("POST"), lambda e: {})["statusCode"] == 201
+    assert [s["name"] for s in telemetry.snapshot()["spans"]] == ["POST /me/emergency"]
