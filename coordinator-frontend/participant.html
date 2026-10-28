@@ -41,6 +41,7 @@
               <h1 id="h-home" tabindex="-1">Hello</h1>
               <div class="meta" id="pStudy"></div>
             </div>
+            <div class="actions"><button type="button" data-refresh><span data-icon="refresh"></span>Refresh</button></div>
           </div>
 
           <section class="report" aria-labelledby="reportTitle">
@@ -76,7 +77,8 @@
 
         <!-- ============================================================ medication -->
         <section data-page="medication" hidden aria-labelledby="h-medication">
-          <div class="page-head"><div><h1 id="h-medication" tabindex="-1">Medication</h1><p>Your dosing schedule, set by your study team.</p></div></div>
+          <div class="page-head"><div><h1 id="h-medication" tabindex="-1">Medication</h1><p>Your dosing schedule, set by your study team.</p></div>
+            <div class="actions"><button type="button" data-refresh><span data-icon="refresh"></span>Refresh</button></div></div>
           <div class="panel">
             <div class="panel-head"><h2>Doses</h2></div>
             <div id="pDoses"></div>
@@ -390,6 +392,13 @@ $('#pReqForm').onsubmit = async e => {
 $('#chatForm').onsubmit = e => { e.preventDefault(); const t = $('#chatText').value; $('#chatText').value = ''; sendChat(t); };
 
 route(false);
+// Refresh (Home, Medication): load everything again, the same as after a save.
+$$('[data-refresh]').forEach(b => b.onclick = async () => {
+  const buttons = $$('[data-refresh]');
+  buttons.forEach(x => { x.disabled = true; });
+  try { await onSignIn(TT.user); toast('Up to date'); }
+  finally { buttons.forEach(x => { x.disabled = false; }); }
+});
 initPortal('participant', onSignIn).then(() => route(false));
 </script>
 </body>
