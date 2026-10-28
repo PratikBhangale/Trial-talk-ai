@@ -65,10 +65,13 @@ class Router:
         path = event.get("rawPath", "/")
         template = next((tpl for m, pattern, _, tpl in self.routes if m == method and pattern.match(path)),
                         "unmatched")  # the route template, never the URL: ids stay out of telemetry
-        with telemetry.request_span(method, template, event.get("headers")) as span:
-            resp = self._dispatch(event, claims_fn, method, path)
-            telemetry.finish_request(span, resp["statusCode"])
-            return resp
+        try:
+            with telemetry.request_span(method, template, event.get("headers")) as span:
+                resp = self._dispatch(event, claims_fn, method, path)
+                telemetry.finish_request(span, resp["statusCode"])
+                return resp
+        finally:
+            telemetry.flush()  # after the request span has ended, so it goes out with this invocation
 
     def _dispatch(self, event: dict, claims_fn: Callable[[dict], dict], method: str, path: str) -> dict:
         try:

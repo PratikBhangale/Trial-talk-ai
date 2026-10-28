@@ -8,6 +8,50 @@ from common.http import HttpError
 from migrate.handler import split_sql
 
 
+# ------------------------------------------------------------------ http router
+
+def test_dispatch_flushes_telemetry_after_the_request_span_ends(monkeypatch):
+    from contextlib import contextmanager
+
+    from common import http, telemetry
+    calls = []
+
+    @contextmanager
+    def fake_span(method, route, headers=None):
+        calls.append(("open", f"{method} {route}"))
+        try:
+            yield object()
+        finally:
+            calls.append(("close", route))
+
+    monkeypatch.setattr(telemetry, "request_span", fake_span)
+    monkeypatch.setattr(telemetry, "finish_request", lambda span, status: calls.append(("status", status)))
+    monkeypatch.setattr(telemetry, "flush", lambda: calls.append(("flush",)))
+    r = http.Router()
+
+    @r.route("GET", "/ok/{x}")
+    def ok(event, claims, x):
+        return 200, {"x": x}
+
+    @r.route("GET", "/boom")
+    def boom(event, claims):
+        raise RuntimeError("handled by _dispatch")
+
+    def call(path):
+        return r.dispatch({"rawPath": path, "requestContext": {"http": {"method": "GET"}}}, lambda e: {})
+
+    assert call("/ok/1")["statusCode"] == 200
+    assert calls == [("open", "GET /ok/{x}"), ("status", 200), ("close", "/ok/{x}"), ("flush",)]
+    calls.clear()
+    assert call("/boom")["statusCode"] == 500
+    assert calls[-2:] == [("close", "/boom"), ("flush",)]
+    calls.clear()
+    monkeypatch.setattr(telemetry, "finish_request", lambda span, status: (_ for _ in ()).throw(ValueError("x")))
+    with pytest.raises(ValueError):  # even if something escapes, the flush still runs
+        call("/ok/2")
+    assert calls[-1] == ("flush",)
+
+
 # ------------------------------------------------------------------ scheduling
 
 def test_build_cron_daily_and_weekdays():

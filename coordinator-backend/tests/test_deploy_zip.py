@@ -102,10 +102,16 @@ def test_prebuilt_deps_dir_is_reused(deploy, tmp_path):
     assert "opentelemetry/marker.py" in names(trig.build_zip("tt-ingest", tmp_path, deps_dir=deps))
 
 
-def test_functions_get_the_db_sink_env_var(deploy):
+def test_trigger_functions_store_spans_and_the_staff_api_does_not(deploy):
     trig, portal = deploy
-    assert trig.TELEMETRY_ENV == {"TELEMETRY_DB_SINK": "1"}
-    assert portal.TELEMETRY_ENV == {"TELEMETRY_DB_SINK": "1"}
+    assert trig.TELEMETRY_ENV == {"TELEMETRY_DB_SINK": "1"}       # the pipeline traces the dashboard reads
+    # The staff API only reads spans: storing its own would let the dashboard's polling bury the pipeline traces.
+    # It has DB_CLUSTER_ARN + DB_SECRET_ARN, so the sink must be switched off explicitly, not just left unset.
+    assert not hasattr(portal, "TELEMETRY_ENV")
+    env = portal.staff_env("pool-1", "arn:role")
+    assert env["TELEMETRY_DB_SINK"] == "0"
+    assert env["DB_CLUSTER_ARN"] and env["DB_SECRET_ARN"] and env["STAFF_POOL_ID"] == "pool-1"
+    assert env["SCHEDULER_ROLE_ARN"] == "arn:role"
 
 
 def test_pip_command_uses_the_pinned_file(monkeypatch, tmp_path):

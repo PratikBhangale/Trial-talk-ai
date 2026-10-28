@@ -85,15 +85,41 @@ def _buckets(rows: list[dict], since: int, now: int, step: int, empty: dict) -> 
             for b in range(since // step * step, now // step * step + 1, step)]
 
 
+# ------------------------------------------------------------------ roots
+#
+# A trace's root is its earliest stored span (start_ts, then span_id) among the spans that have no stored parent:
+# parent_id IS NULL, or no row of the same trace has span_id = parent_id (the dev server keeps request spans in
+# memory while the agent's spans are stored; in AWS a flush can miss the root). One root per trace, so nothing is
+# counted twice. A request failed when ANY span of its trace is ERROR, the traces list's rule too: a WhatsApp root
+# ends OK before routing, and an agent failure marks only agent.call / agent.invoke.
+
+_ROOTS = (
+    "SELECT DISTINCT ON (c.trace_id) c.* FROM trial.telemetry_spans c "
+    "WHERE {scope}(c.parent_id IS NULL OR NOT EXISTS (SELECT 1 FROM trial.telemetry_spans p "
+    "      WHERE p.trace_id = c.trace_id AND p.span_id = c.parent_id)) "
+    "ORDER BY c.trace_id, c.start_ts, c.span_id")
+
+# Roots that started at or after :since, each with its trace's error flag. Only traces with a span in the window are
+# looked at; a trace whose root started before the window stays out even if later spans fall inside it.
+WINDOW_ROOTS = (
+    "WITH roots AS (SELECT r.trace_id, r.start_ts, r.duration_ms, "
+    "  EXISTS (SELECT 1 FROM trial.telemetry_spans e WHERE e.trace_id = r.trace_id AND e.status = 'ERROR') "
+    "    AS failed "
+    "FROM (" + _ROOTS.format(scope="c.trace_id IN (SELECT trace_id FROM trial.telemetry_spans "
+                                   "WHERE start_ts >= to_timestamp(:since::bigint)) AND ") + ") r "
+    "WHERE r.start_ts >= to_timestamp(:since::bigint)) ")
+
+ALL_ROOTS = "WITH roots AS (" + _ROOTS.format(scope="") + ") "
+
+
 # ------------------------------------------------------------------ queries
 
 def _summary(t: db.Tx, since: int) -> dict:
     row = t.one(
-        "SELECT count(*) AS requests, count(*) FILTER (WHERE status = 'ERROR') AS errors, "
+        WINDOW_ROOTS + "SELECT count(*) AS requests, count(*) FILTER (WHERE failed) AS errors, "
         "  count(DISTINCT trace_id) AS traces, "
         "  percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50, "
-        "  percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95 "
-        "FROM trial.telemetry_spans WHERE parent_id IS NULL AND start_ts >= to_timestamp(:since::bigint)",
+        "  percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95 FROM roots",
         since=since)
     tokens = t.one("SELECT coalesce(sum(input_tokens), 0) AS tin, coalesce(sum(output_tokens), 0) AS tout "
                    "FROM trial.communications WHERE input_tokens IS NOT NULL "
@@ -107,19 +133,17 @@ def _summary(t: db.Tx, since: int) -> dict:
 
 def _request_series(t: db.Tx, since: int, now: int) -> list[dict]:
     rows = t.query(
-        "SELECT (floor(extract(epoch FROM start_ts) / :step::int) * :step::int)::bigint AS b, count(*) AS count, "
-        "  count(*) FILTER (WHERE status = 'ERROR') AS errors FROM trial.telemetry_spans "
-        "WHERE parent_id IS NULL AND start_ts >= to_timestamp(:since::bigint) GROUP BY 1",
+        WINDOW_ROOTS + "SELECT (floor(extract(epoch FROM start_ts) / :step::int) * :step::int)::bigint AS b, "
+        "  count(*) AS count, count(*) FILTER (WHERE failed) AS errors FROM roots GROUP BY 1",
         step=REQUEST_BUCKET_S, since=since)
     return _buckets(rows, since, now, REQUEST_BUCKET_S, {"count": 0, "errors": 0})
 
 
 def _latency_series(t: db.Tx, since: int, now: int) -> list[dict]:
     rows = t.query(
-        "SELECT (floor(extract(epoch FROM start_ts) / :step::int) * :step::int)::bigint AS b, "
+        WINDOW_ROOTS + "SELECT (floor(extract(epoch FROM start_ts) / :step::int) * :step::int)::bigint AS b, "
         "  percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50, "
-        "  percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95 FROM trial.telemetry_spans "
-        "WHERE parent_id IS NULL AND start_ts >= to_timestamp(:since::bigint) GROUP BY 1",
+        "  percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95 FROM roots GROUP BY 1",
         step=LATENCY_BUCKET_S, since=since)
     for r in rows:
         r["p50"], r["p95"] = _r1(r["p50"]), _r1(r["p95"])
@@ -201,16 +225,15 @@ def observability(event, staff: Staff):
 
 @router.route("GET", "/staff/observability/traces")
 def traces(event, staff: Staff):
-    """Most recent traces, one row per root span, newest first."""
+    """Most recent traces, one row per trace (its root, see ALL_ROOTS), newest first."""
     require(staff, "ops:read")
     limit = _int_param(event, "limit", 50, 1, 200)
     with db.tx(site_ids=staff.site_ids) as t:
         rows = t.query(
-            f"SELECT r.trace_id, to_char(r.start_ts AT TIME ZONE 'UTC', '{ISO}') AS started_at, "
+            ALL_ROOTS + f"SELECT r.trace_id, to_char(r.start_ts AT TIME ZONE 'UTC', '{ISO}') AS started_at, "
             "  r.name AS root_name, r.service, r.duration_ms, agg.span_count, agg.tokens, "
             "  CASE WHEN agg.has_error THEN 'ERROR' ELSE r.status END AS status "
-            "FROM (SELECT * FROM trial.telemetry_spans WHERE parent_id IS NULL "
-            "      ORDER BY start_ts DESC, span_id LIMIT :limit::int) r "
+            "FROM (SELECT * FROM roots ORDER BY start_ts DESC, span_id LIMIT :limit::int) r "
             "JOIN LATERAL (SELECT count(*) AS span_count, bool_or(w.status = 'ERROR') AS has_error, "
             # Tokens: agent.invoke spans only (the router's agent.call span repeats the same numbers); a trace with
             # no token-bearing agent.invoke falls back to its agent.call spans.

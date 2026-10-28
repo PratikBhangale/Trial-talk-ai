@@ -191,6 +191,65 @@ def test_trace_tokens_not_double_counted(call_staff, spans):
     assert traces[only_call]["tokens"] == 165
 
 
+def _bucket_iso(ago_min, step):
+    """The request-series bucket label a span started `ago_min` minutes ago lands in (as _span stores it)."""
+    start = datetime.now(timezone.utc) - timedelta(minutes=ago_min)
+    b = int(start.timestamp()) // step * step
+    return datetime.fromtimestamp(b, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), start
+
+
+def test_error_in_a_child_span_fails_the_request(call_staff, spans):
+    from staff_api import observability as obs
+    _seed(spans)  # T_ERR: the error is on the root itself; T_OK: no error anywhere
+    child_err = "9" * 32  # root OK (WhatsApp ingest ends before routing), agent.invoke ERROR
+    label, start = _bucket_iso(180, obs.REQUEST_BUCKET_S)
+    spans.execute(INSERT_SPAN, ("c-root", child_err, None, "whatsapp.ingest", "ingest", "SERVER", start, 50.0, "OK",
+                                "{}"))
+    spans.execute(INSERT_SPAN, ("c-invoke", child_err, "c-root", "agent.invoke", "agent", "INTERNAL", start, 40.0,
+                                "ERROR", "{}"))
+    status, body = call_staff("GET", "/staff/observability", query={"hours": "24"})
+    assert status == 200, body
+    s = body["summary"]
+    assert (s["requests"], s["errors"], s["traces"]) == (3, 2, 3) and s["error_rate"] == round(2 / 3, 4)
+    req = {b["t"]: b for b in body["series"]["requests"]}
+    assert (req[label]["count"], req[label]["errors"]) == (1, 1)
+    assert sum(b["count"] for b in req.values()) == 3 and sum(b["errors"] for b in req.values()) == 2
+    traces = {t["trace_id"]: t for t in call_staff("GET", "/staff/observability/traces")[1]["traces"]}
+    assert traces[child_err]["status"] == "ERROR" and traces[T_ERR]["status"] == "ERROR"
+    assert traces[T_OK]["status"] == "OK"
+
+
+def test_trace_with_only_an_orphaned_span_is_listed(call_staff, spans):
+    # Dev-server web chat: POST /me/chat and agent.call stay in memory, the agent's own spans are stored.
+    orphan = "7" * 32
+    _span(spans, "g-invoke", orphan, "never-stored", "agent.invoke", 8, 600.0, service="trial-agent",
+          attrs={"gen_ai.usage.input_tokens": 300, "gen_ai.usage.output_tokens": 40})
+    _span(spans, "g-tool", orphan, "g-invoke", "tool.search_trial_docs", 8, 30.0, service="trial-agent")
+    status, body = call_staff("GET", "/staff/observability/traces")
+    assert status == 200, body
+    (row,) = body["traces"]
+    assert (row["trace_id"], row["root_name"], row["service"], row["duration_ms"], row["span_count"],
+            row["tokens"], row["status"]) == (orphan, "agent.invoke", "trial-agent", 600.0, 2, 340, "OK")
+    s = call_staff("GET", "/staff/observability")[1]["summary"]
+    assert (s["requests"], s["traces"], s["errors"], s["p50_ms"]) == (1, 1, 0, 600.0)
+
+
+def test_real_root_plus_orphaned_child_counts_once(call_staff, spans):
+    both = "6" * 32
+    _span(spans, "h-root", both, None, "whatsapp.route", 12, 900.0, service="router")
+    # its parent (an agent.call that was never flushed) is missing, so it is a root candidate too
+    _span(spans, "h-invoke", both, "h-lost-call", "agent.invoke", 12 - 1 / 60, 700.0, status="ERROR",
+          service="trial-agent", attrs={"gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 5})
+    traces = call_staff("GET", "/staff/observability/traces")[1]["traces"]
+    assert [(t["trace_id"], t["root_name"], t["span_count"], t["tokens"], t["status"]) for t in traces] == \
+           [(both, "whatsapp.route", 2, 15, "ERROR")]
+    body = call_staff("GET", "/staff/observability")[1]
+    s = body["summary"]
+    assert (s["requests"], s["traces"], s["errors"], s["p50_ms"]) == (1, 1, 1, 900.0)
+    assert sum(b["count"] for b in body["series"]["requests"]) == 1
+    assert sum(b["errors"] for b in body["series"]["requests"]) == 1
+
+
 def test_empty_db_returns_zeros_not_500(call_staff, spans):
     status, body = call_staff("GET", "/staff/observability")
     assert status == 200, body

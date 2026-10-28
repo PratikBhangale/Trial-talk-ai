@@ -8,13 +8,16 @@ same synthetic data as the deployed database, adds synthetic staff, and serves:
 
     /staff, /participant            one page per portal (ui/*.html), as they will be deployed separately
     /api/staff/...  -> staff_api.handler        signed in as a staff-pool user (coordinator / PI); this includes
-                                                emergency alerts, staff accounts and the OpenTelemetry widget
+                                                emergency alerts, staff accounts and the Observability dashboard
     /api/me...      -> participant_api.handler  signed in as a participant-pool user
 
 "Sign-in" is the X-Dev-Identity header (<portal>:<username>) in place of Cognito + the JWT authorizer.
 The server builds the token claims from the fake user pools the way Cognito would, including the
 real staff pre-token trigger, so what the staff "Team" panel changes (role, sites, disabled) is what the
-next request gets. OpenTelemetry needs `pip install opentelemetry-sdk`; without it the widget says so. Database calls run as each Lambda's own login, so RLS and grants are real.
+next request gets. Database calls run as each Lambda's own login, so RLS and grants are real.
+The Observability dashboard reads trial.telemetry_spans: --seed-telemetry data and the agent's spans from web
+chat. Request spans (`pip install opentelemetry-sdk`) are not stored unless TELEMETRY_DB_SINK=1, so the
+dashboard's own polling doesn't bury those traces.
 Scheduler, WhatsApp, SES and the agent are fakes (tests/local_env.py), unless --real-agent, which
 sends web chat to the deployed AgentCore runtime with your local AWS credentials.
 --seed-telemetry adds about 7 days of synthetic traces (trial.telemetry_spans) and token-bearing messages so the

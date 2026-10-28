@@ -22,8 +22,7 @@ import time
 import boto3
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "triggers" / "infra"))
-from deploy import (ACCOUNT, ARN, CLUSTER_ARN, GROUP, REGION, SCHEDULER_ROLE, TELEMETRY_ENV, bundle, ensure_role,
-                    fn_arn)
+from deploy import ACCOUNT, ARN, CLUSTER_ARN, GROUP, REGION, SCHEDULER_ROLE, bundle, ensure_role, fn_arn
 
 PORTAL_SECRET_ARN = f"arn:aws:secretsmanager:{ARN}:secret:trialtalk/db/tt_portal-VwDkdB"
 CODE_DIR = pathlib.Path(__file__).resolve().parent.parent / "lambdas"
@@ -37,6 +36,20 @@ APPROVED_TEMPLATES = "dose_reminder_v2,visit_reminder_v1,daily_checkin_v1"
 FIRST_STAFF = {"email": "divya.shah7999@gmail.com", "name": "Divya Shah", "group": "PI",
                "site_ids": "RIVERSIDE,LAKEVIEW", "study_ids": "KOA-301"}
 TAGS = {"project": "trialtalk"}
+# The staff API reads trial.telemetry_spans; it does not store its own request spans. The dashboard polls it every
+# few seconds (alerts, usage, observability), so storing them would bury the pipeline traces the trigger Lambdas
+# write (they keep TELEMETRY_DB_SINK=1). Explicitly "0": with DB_CLUSTER_ARN + DB_SECRET_ARN set, the sink is on
+# unless told otherwise. The staff API never calls persist_spans, the other thing this flag turns off.
+STAFF_TELEMETRY_ENV = {"TELEMETRY_DB_SINK": "0"}
+
+
+def staff_env(pool_id: str, sched_role_arn: str) -> dict:
+    """Environment of tt-staff-api."""
+    return {"DB_CLUSTER_ARN": CLUSTER_ARN, "DB_SECRET_ARN": PORTAL_SECRET_ARN, "DB_NAME": "trialtalk",
+            "STAFF_POOL_ID": pool_id, "PARTICIPANT_POOL_ID": "",
+            "SCHEDULE_GROUP": GROUP, "REMINDER_FUNCTION_ARN": fn_arn("tt-reminder"),
+            "SCHEDULER_ROLE_ARN": sched_role_arn, "APPROVED_TEMPLATES": APPROVED_TEMPLATES, "LEGACY_TABLE": "",
+            **STAFF_TELEMETRY_ENV}
 
 
 def build_zip(out_dir, deps_dir=None):
@@ -235,12 +248,8 @@ def main():
             "cognito-idp:AdminRemoveUserFromGroup"]},
     ]}
     staff_role, _ = ensure_role(iam, "tt-staff-api-lambda", "lambda.amazonaws.com", policy)
-    env = {"DB_CLUSTER_ARN": CLUSTER_ARN, "DB_SECRET_ARN": PORTAL_SECRET_ARN, "DB_NAME": "trialtalk",
-           "STAFF_POOL_ID": pool_id, "PARTICIPANT_POOL_ID": "",
-           "SCHEDULE_GROUP": GROUP, "REMINDER_FUNCTION_ARN": fn_arn("tt-reminder"),
-           "SCHEDULER_ROLE_ARN": sched_role_arn, "APPROVED_TEMPLATES": APPROVED_TEMPLATES, "LEGACY_TABLE": "",
-           **TELEMETRY_ENV}
-    ensure_function(lam, logs, "tt-staff-api", staff_role, "staff_api.handler.handler", 29, env, code)
+    ensure_function(lam, logs, "tt-staff-api", staff_role, "staff_api.handler.handler", 29,
+                    staff_env(pool_id, sched_role_arn), code)
 
     print("http api")
     api_id, endpoint = ensure_api(apigw, pool_id, client_id)
